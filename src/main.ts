@@ -78,7 +78,12 @@ async function setup() {
     assertWindows();
     if (typeof id !== 'string') throw new Error('无效记录。');
     const { executable, computerUse } = await manager.launchSpec(id);
-    if (computerUse && !(await manager.computerUseStatus(id)).ready) throw new Error('Computer Use 运行环境尚未就绪，请先点击“准备 Computer Use”并查看检测结果。');
+    if (computerUse) {
+      try {
+        const status = await manager.computerUseStatus(id);
+        if (!status.ready) report('Computer Use 尚未就绪，仍可启动副本；请在 Codex 内检查插件与 Any App 设置。');
+      } catch (error) { report(`无法确认 Computer Use 状态，仍可启动副本：${error instanceof Error ? error.message : String(error)}`); }
+    }
     await new Promise<void>((resolve, reject) => {
       const child = spawn(executable, [], { detached: true, stdio: 'ignore', cwd: path.dirname(executable), shell: false,
         env: computerUse ? { ...process.env, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1', NODE_REPL_TRUSTED_CODE_PATHS: [process.env.NODE_REPL_TRUSTED_CODE_PATHS, path.join(path.dirname(executable), 'resources/cua_node/bin/node_modules'), path.join(path.dirname(executable), 'resources/plugins/openai-bundled')].filter(Boolean).join(path.delimiter) } : process.env });

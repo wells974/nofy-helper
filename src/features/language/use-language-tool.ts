@@ -70,7 +70,7 @@ export function useLanguageTool() {
     }),
     launch: (id: string) => run('正在启动副本', async () => {
       unwrap(await api.launch(id));
-      notify(records.find(record => record.id === id)?.features?.computerUse ? '已发出启动请求。请开启 Any App，在新会话中验证截图与窗口操作。' : '已发出启动请求。请在 Codex 的 Language 中选择简体中文，并检查菜单与设置页。');
+      notify(records.find(record => record.id === id)?.features?.computerUse ? computerUseStates[id]?.ready ? '已发出启动请求。请开启 Any App，在新会话中验证截图与窗口操作。' : '已发出启动请求。Computer Use 尚未确认就绪，可在 Codex 内检查插件与 Any App 设置。' : '已发出启动请求。请在 Codex 的 Language 中选择简体中文，并检查菜单与设置页。');
     }),
     restore: (id: string) => run('正在恢复原始文件', async () => {
       const record = unwrap(await api.restore(id)); if (!record) return;

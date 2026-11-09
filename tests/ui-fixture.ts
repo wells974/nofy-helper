@@ -13,7 +13,9 @@ const record: Installation = { id: '259cf42f-233e-4c88-99ae-14a02bd88dc7', creat
 let records: Installation[] = JSON.parse(sessionStorage.getItem('ui-records') || 'null') || (state === 'records' ? [record] : []);
 const save = () => sessionStorage.setItem('ui-records', JSON.stringify(records));
 const pause = () => new Promise<void>(resolve => setTimeout(resolve, 180));
-let cuaStatus: ComputerUseStatus = { ready: false, canPrepare: state !== 'cua-missing', checks: [{ name: '运行文件', ok: state !== 'cua-missing', detail: state === 'cua-missing' ? '运行文件缺失' : '文件存在' }] };
+let cuaStatus: ComputerUseStatus = state === 'cua-installed'
+  ? { ready: true, canPrepare: true, checks: [{ name: 'Computer Use 插件', ok: true, detail: '官方 CLI：已安装并启用，版本 26.1103.32239。' }, { name: '插件文件诊断', ok: false, warning: true, detail: '官方 CLI 已确认安装，文件布局未确认；可启动副本后验证。' }] }
+  : { ready: false, canPrepare: state !== 'cua-missing', checks: [{ name: '运行文件', ok: state !== 'cua-missing', detail: state === 'cua-missing' ? '运行文件缺失' : '文件存在' }] };
 const api: HelperAPI = {
   async overview() { calls.push('overview'); await pause(); return { ok: true, value: { platform: state === 'mac' ? 'darwin-arm64' : 'win32-x64', candidates: state === 'empty' || state === 'mac' ? [] : [{ label: 'Codex', path: source.root }], installations: records } }; },
   async choose() { calls.push('choose'); return { ok: true, value: source.root }; },

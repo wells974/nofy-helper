@@ -97,26 +97,45 @@ export class ComputerUseRuntime {
         const plugins = JSON.parse(text.replace(/^\uFEFF/, ''));
         if (!Array.isArray(plugins.installed)) throw new Error('插件列表格式不受支持。');
         const descriptor = JSON.parse(await readFile(path.join(this.root, 'resources/plugins/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json'), 'utf8'));
-        const installed = plugins.installed.filter((plugin: any) => plugin.pluginId === selector && plugin.installed === true && plugin.enabled === true);
+        const installed = plugins.installed.filter((plugin: any) => plugin?.pluginId === selector);
         if (descriptor.name !== 'computer-use' || typeof descriptor.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(descriptor.version)) throw new Error('Computer Use 插件描述不受支持。');
-        let cacheValid = false;
-        if (installed.length === 1 && installed[0].version === descriptor.version) {
-          const cached = path.join(this.codexHome, 'plugins/cache/openai-bundled/computer-use', descriptor.version, '.codex-plugin/plugin.json');
-          try {
-            await this.checkLinks(cached);
-            cacheValid = await hashFile(cached) === await hashFile(path.join(this.root, 'resources/plugins/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json'));
-          } catch { /* CLI registration alone does not prove a usable cache */ }
+        if (installed.length > 1) throw new Error('官方 CLI 返回重复的 Computer Use 插件记录。');
+        const plugin = installed[0];
+        const registered = plugin?.installed === true, enabled = plugin?.enabled === true;
+        checks.push({ name: 'Computer Use 插件', ok: registered && enabled, detail: !registered ? '官方 CLI：插件尚未安装，请准备 Computer Use。' : !enabled ? '官方 CLI：插件已安装但未启用，请准备 Computer Use。' : `官方 CLI：已安装并启用，版本 ${typeof plugin.version === 'string' ? plugin.version : '未提供'}。` });
+        if (registered && enabled) {
+          const version = plugin.version;
+          if (typeof version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(version)) {
+            checks.push({ name: '插件文件诊断', ok: false, warning: true, detail: 'CLI 未提供可识别的缓存版本；安装状态已确认，请启动后验证效果。' });
+          } else {
+            // CLI versions and local marketplace roots can differ from the packaged descriptor.
+            // A fixed cache path or raw JSON formatting must not override official installation state.
+            const candidates = [path.join(this.codexHome, 'plugins/cache/openai-bundled/computer-use', version)];
+            if (plugin.source?.source === 'local' && typeof plugin.source.path === 'string' && path.isAbsolute(plugin.source.path)) candidates.push(plugin.source.path);
+            let verified: string | undefined;
+            const details: string[] = [];
+            for (const root of new Set(candidates)) {
+              const file = path.join(root, '.codex-plugin/plugin.json');
+              try {
+                await this.checkLinks(file);
+                const cached = JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, ''));
+                if (cached.name !== 'computer-use' || cached.version !== version) { details.push(`${file}：名称或版本与 CLI 不一致`); continue; }
+                verified = root; break;
+              } catch { details.push(`${file}：描述文件缺失、不可读或含目录联接`); }
+            }
+            checks.push({ name: '插件文件诊断', ok: !!verified, warning: !verified, detail: verified ? `名称和版本匹配：${verified}` : `官方 CLI 已确认安装，文件布局未确认：${details.join('；')}。可启动副本后验证。` });
+            if (version !== descriptor.version) checks.push({ name: '插件版本提示', ok: false, warning: true, detail: `已安装 ${version}，应用包内 ${descriptor.version}；保留已启用的插件，启动后确认兼容性。` });
+          }
         }
-        const ok = cacheValid;
-        checks.push({ name: 'Computer Use 插件', ok, detail: ok ? `已启用，缓存描述校验通过，版本 ${descriptor.version}` : '尚未安装、未启用、缓存缺失或版本不一致，请准备运行环境。' });
       } catch (error) { canPrepare = false; checks.push({ name: 'Computer Use 插件', ok: false, detail: error instanceof Error ? error.message : String(error) }); }
     }
     const snapshot = await this.snapshot();
-    return { ready: canPrepare && checks.every(check => check.ok), canPrepare, checks, backup: snapshot ? path.join(this.snapshots, `${snapshot.id}.toml`) : undefined };
+    for (const check of checks.filter(check => !check.ok)) this.report(`${check.warning ? 'Computer Use 提示' : 'Computer Use 检查未通过'}：${check.name}：${check.detail}`);
+    return { ready: canPrepare && checks.every(check => check.ok || check.warning), canPrepare, checks, backup: snapshot ? path.join(this.snapshots, `${snapshot.id}.toml`) : undefined };
   }
   async prepare(): Promise<ComputerUseStatus> {
     const before = await this.status();
-    if (before.ready) { this.report('Computer Use 运行文件和插件已就绪，无需重复安装。'); return before; }
+    if (before.ready) { this.report('官方 CLI 已确认 Computer Use 插件安装并启用，无需重复安装。'); return before; }
     if (!before.canPrepare) throw new Error('当前副本的 Computer Use 运行文件不完整或 CLI 校验失败；请查看检测结果，并从完整官方安装重新创建副本。');
     const config = await this.readConfig();
     let snapshot = await this.snapshot();
@@ -145,7 +164,7 @@ export class ComputerUseRuntime {
       await this.save(snapshot);
     }
     const after = await this.status();
-    if (!after.ready) throw new Error(`Computer Use 准备后核验未通过。原配置备份：${backup}`);
+    if (!after.ready) throw new Error(`Computer Use 准备后核验未通过：${after.checks.filter(check => !check.ok && !check.warning).map(check => `${check.name}：${check.detail}`).join('；')}。原配置备份：${backup}`);
     this.report('Computer Use 运行文件与插件已就绪；启动副本后仍需在 Codex 内确认截图与操作效果。');
     return after;
   }

@@ -1,7 +1,7 @@
 export interface Candidate { path: string; label: string }
 export interface RepairOptions { computerUse?: boolean }
 export interface ComputerUseSupport { supported: boolean; reason: string; files: string[]; patches: number }
-export interface RuntimeCheck { name: string; ok: boolean; detail: string }
+export interface RuntimeCheck { name: string; ok: boolean; detail: string; warning?: boolean }
 export interface ComputerUseStatus { ready: boolean; canPrepare: boolean; checks: RuntimeCheck[]; backup?: string }
 export interface Inspection {
   root: string; executable: string; version: string; packageName: string;

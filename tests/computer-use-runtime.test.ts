@@ -94,10 +94,54 @@ test('retry after failed preparation retains the first configuration backup', as
   await runtime.restoreConfig();
   assert.equal(await readFile(path.join(e.home, 'config.toml'), 'utf8'), e.original);
 });
-test('missing plugin cache is not reported ready and a changed native runtime is rejected', async t => {
+test('missing default cache is advisory when the official CLI confirms installation, while changed native files block preparation', async t => {
   const e = await environment(t); await e.runtime.prepare();
   await rm(path.join(e.home, 'plugins'), { recursive: true });
-  assert.equal((await e.runtime.status()).ready, false);
+  const status = await e.runtime.status();
+  assert.equal(status.ready, true);
+  assert.ok(status.checks.some(check => check.name === '插件文件诊断' && check.warning));
+  await e.runtime.prepare(); assert.equal(e.additions(), 1, 'do not reinstall an officially enabled plugin solely for an unfamiliar cache layout');
   await writeFile(path.join(e.root, 'resources/cua_node/bin/node.exe'), 'modified');
   assert.equal((await e.runtime.status()).canPrepare, false);
+});
+test('accepts the reported local marketplace registration and a plugin version different from the packaged descriptor', async t => {
+  const e = await environment(t);
+  const pluginRoot = path.join(e.home, '.tmp/bundled-marketplaces/openai-bundled/plugins/computer-use');
+  const file = path.join(pluginRoot, '.codex-plugin/plugin.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ name: 'computer-use', version: '26.1103.32239' }, null, 2));
+  const logs: string[] = [];
+  const runtime = new ComputerUseRuntime(e.root, e.source, e.folder, e.home, message => logs.push(message), async (_file, args) => {
+    assert.ok(!args.includes('add'), 'installed and enabled plugins must not be registered again');
+    return JSON.stringify({ installed: [
+      { pluginId: 'unified-computer-use@openai-bundled', name: 'unified-computer-use', version: '26.1103.32239', installed: true, enabled: true },
+      { pluginId: 'computer-use@openai-bundled', name: 'computer-use', marketplaceName: 'openai-bundled', version: '26.1103.32239', installed: true, enabled: true, source: { source: 'local', path: pluginRoot }, marketplaceSource: { sourceType: 'local', source: path.dirname(path.dirname(pluginRoot)) } },
+    ], available: [] });
+  });
+  const status = await runtime.prepare();
+  assert.equal(status.ready, true);
+  assert.ok(status.checks.find(check => check.name === '插件文件诊断')?.ok);
+  assert.ok(status.checks.find(check => check.name === '插件版本提示')?.warning);
+  assert.ok(logs.some(message => message.includes('26.1103.32239')));
+  assert.equal(status.backup, undefined, 'inspection must not create a config backup or change configuration');
+  assert.equal(await readFile(path.join(e.home, 'config.toml'), 'utf8'), e.original);
+});
+test('cache descriptor JSON formatting does not invalidate an enabled plugin', async t => {
+  const e = await environment(t); await e.runtime.prepare();
+  const cached = path.join(e.home, 'plugins/cache/openai-bundled/computer-use/1.0/.codex-plugin/plugin.json');
+  await writeFile(cached, '\uFEFF' + JSON.stringify({ version: '1.0', name: 'computer-use', description: 'normalized by CLI' }, null, 2));
+  const status = await e.runtime.status();
+  assert.equal(status.ready, true);
+  assert.equal(status.checks.find(check => check.name === '插件文件诊断')?.ok, true);
+});
+test('reports an actually missing or disabled plugin separately from advisory cache details', async t => {
+  const e = await environment(t);
+  const missing = await e.runtime.status();
+  assert.equal(missing.ready, false); assert.equal(missing.canPrepare, true);
+  assert.match(missing.checks.find(check => check.name === 'Computer Use 插件')!.detail, /尚未安装/);
+  const disabled = new ComputerUseRuntime(e.root, e.source, e.folder, e.home, undefined, async () => JSON.stringify({ installed: [{ pluginId: 'computer-use@openai-bundled', installed: true, enabled: false, version: '1.0' }] }));
+  const status = await disabled.status();
+  assert.equal(status.ready, false); assert.equal(status.canPrepare, true);
+  assert.match(status.checks.find(check => check.name === 'Computer Use 插件')!.detail, /已安装但未启用/);
+  assert.equal(status.checks.some(check => check.warning), false);
 });

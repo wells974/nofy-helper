@@ -19,9 +19,11 @@
 
 ## 运行环境与恢复
 
-工具检查副本 `resources/codex.exe`、`cua_node/bin/` 下的 Node／Node REPL／CUA REPL／Sky Windows 服务及 bundled 插件描述，与原始安装逐项对照。使用 `shell: false` 启动官方 CLI，以进程内 `-c` 参数指定副本的本地 bundled marketplace，执行 `plugin list` 和必要的 `plugin add computer-use@openai-bundled`。
+工具检查副本 `resources/codex.exe`、`cua_node/bin/` 下的 Node／Node REPL／CUA REPL／Sky Windows 服务及 bundled 插件描述，与原始安装逐项对照。插件就绪依据为官方 CLI 返回的唯一 `computer-use@openai-bundled` 记录，要求 `installed: true` 且 `enabled: true`。插件文件诊断使用 CLI 返回的版本，检查默认缓存目录及 CLI 提供的本地 marketplace 源路径，比较描述文件的名称和版本，不要求 JSON 字节完全一致。缓存位置无法确认或插件版本与包内版本不同，仅作为兼容性提示，不推翻官方安装状态，也不触发重复安装。
 
-准备前备份当前 `config.toml`，记录准备后的内容摘要和文件是否存在。重复尝试沿用首次备份；恢复前验证备份，并确认当前配置仍是本工具准备后的版本，避免覆盖用户之后的修改。插件缓存保留，应用文件恢复与配置恢复使用独立入口。
+使用 `shell: false` 启动官方 CLI，以进程内 `-c` 参数指定副本的本地 bundled marketplace，执行 `plugin list` 和必要的 `plugin add computer-use@openai-bundled`。
+
+准备前备份当前 `config.toml`，记录准备后的内容摘要和文件是否存在。重复尝试沿用首次备份；恢复前验证备份，并确认当前配置仍是本工具准备后的版本，避免覆盖用户之后的修改。插件缓存保留，应用文件恢复与配置恢复使用独立入口。Computer Use 未就绪不再禁用副本启动，允许进入 Codex 完成插件／Any App 设置；ASAR／EXE 指纹、官方应用更新和进程冲突仍会阻止不符合条件的启动。
 
 新版本 Computer Use 可使用描述文件插件及独立 `cua_node` 运行时，统一 CUA 清单交由 Codex 原有代码生成；工具不伪造旧版 `computer-use-client.mjs` 或统一 MCP 清单。
 
