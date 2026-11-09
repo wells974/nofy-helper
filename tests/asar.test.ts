@@ -11,9 +11,11 @@ import { archive, provider } from './fixtures';
 test('round-trips archives produced by official @electron/asar, including unpacked payload', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'nofy-official-asar-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const src = path.join(dir, 'source'), target = path.join(dir, 'app.asar');
-  await mkdir(path.join(src, 'webview/assets/async'), { recursive: true });
+  // The official ASAR API splits member paths by the host's path.sep.
+  const member = path.join('webview', 'assets', 'async', '123.js');
+  await mkdir(path.dirname(path.join(src, member)), { recursive: true });
   await writeFile(path.join(src, 'package.json'), '{"name":"codex","version":"1.0"}');
-  await writeFile(path.join(src, 'webview/assets/async/123.js'), provider);
+  await writeFile(path.join(src, member), provider);
   await writeFile(path.join(src, 'webview/assets/zh-CN-a.js'), 'export default {"new":"新聊天"};');
   await writeFile(path.join(src, 'native.bin'), Buffer.from([0, 255, 3, 8]));
   await officialAsar.createPackageWithOptions(src, target, { unpack: '*.bin' });
@@ -22,7 +24,7 @@ test('round-trips archives produced by official @electron/asar, including unpack
   const newHash = await writeArchivePatch(target, plan);
   officialAsar.uncache(target);
   assert.equal(sha256(officialAsar.getRawHeader(target).headerString), newHash);
-  assert.equal(officialAsar.extractFile(target, 'webview/assets/async/123.js').toString(), plan.modified.toString());
+  assert.equal(officialAsar.extractFile(target, member).toString(), plan.modified.toString());
   assert.equal(officialAsar.extractFile(target, 'package.json').toString(), '{"name":"codex","version":"1.0"}');
   assert.deepEqual(await readFile(`${target}.unpacked/native.bin`), Buffer.from([0, 255, 3, 8]));
 });
