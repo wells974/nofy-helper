@@ -33,4 +33,6 @@
 
 未引入参考项目的自定义模型、其他插件、浏览器／Chrome 改动、全局环境变量、代理继承、Windows sandbox 配置或 Windows 10 原生截图二进制修改。
 
+Chrome 与内置 Browser Use 的上游目标、当前缺口和日志诊断步骤见 [浏览器适配核对](browser-use.md)。Any App 已启用不能作为浏览器功能已修复的依据。
+
 官方功能说明：[Computer Use](https://learn.chatgpt.com/docs/computer-use)。账户／地区、组织策略、插件开关与原生权限仍可能影响实际可用性。
