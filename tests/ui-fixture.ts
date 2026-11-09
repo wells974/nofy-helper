@@ -5,9 +5,9 @@ const calls: string[] = [];
 let callback: ((event: Progress) => void) | null = null;
 const source: Inspection = {
   root: 'C:\\Users\\Alex\\AppData\\Local\\Programs\\Codex', executable: 'Codex.exe',
-  version: state.startsWith('cua') ? '26.1103.4239.0' : '26.1104.1', packageName: 'Codex', sourceHash: 'a'.repeat(64), executableHash: 'b'.repeat(64), headerHash: 'c'.repeat(64),
+  version: state.startsWith('cua') ? '26.1103.32239' : '26.1104.1', packageName: 'Codex', sourceHash: 'a'.repeat(64), executableHash: 'b'.repeat(64), headerHash: 'c'.repeat(64),
   translationFiles: 3, gateFile: 'webview/assets/index-Bh7w8Sc3.js', gateOffset: 100, store: false,
-  computerUse: { supported: state.startsWith('cua'), reason: state.startsWith('cua') ? '已识别当前版本的 Computer Use 开关；创建副本后还需准备运行环境。' : '此版本暂未适配 Computer Use。', files: ['webview/cua.js'], patches: 5 },
+  computerUse: { supported: state.startsWith('cua'), reason: state.startsWith('cua') ? 'Computer Use 关键代码结构匹配，可尝试修复 26.1103.32239；创建副本后需准备运行环境，并验证截图与操作。' : 'Computer Use 结构不匹配（运行时开关缺失），无法生成补丁。', files: ['webview/cua.js'], patches: 6 },
 };
 const record: Installation = { id: '259cf42f-233e-4c88-99ae-14a02bd88dc7', createdAt: '2026-11-09T11:43:27.000Z', source, status: 'ready', patchedAsarHash: 'd'.repeat(64), patchedExeHash: 'e'.repeat(64), patchedHeaderHash: 'f'.repeat(64) };
 let records: Installation[] = JSON.parse(sessionStorage.getItem('ui-records') || 'null') || (state === 'records' ? [record] : []);

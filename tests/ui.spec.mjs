@@ -96,6 +96,7 @@ try {
     await page.reload();
     await page.waitForFunction(() => document.querySelector('#install-path')?.disabled === false);
     await button('检测安装').click();
+    await page.getByText(/关键代码结构匹配，可尝试修复 26\.1103\.32239/).waitFor();
     await button('中文 + Computer Use').click();
     await button('创建修复副本').click();
     await button('准备 Computer Use').waitFor();

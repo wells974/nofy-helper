@@ -13,7 +13,7 @@ app.whenReady().then(async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'nofy-electron-smoke-'));
   let worker: Worker | undefined;
   try {
-    const source = path.join(temp, '安装目录 with spaces'); await computerUseFixture(source);
+    const source = path.join(temp, '安装目录 with spaces'); await computerUseFixture(source, { 'package.json': '{"name":"codex","version":"26.1103.32239"}' });
     // Match the Store layout: a small Codex launcher plus the Electron host.
     await writeFile(path.join(source, 'ChatGPT.exe'), await readFile(path.join(source, 'Codex.exe')));
     await writeFile(path.join(source, 'Codex.exe'), 'launcher without an Electron integrity resource');
@@ -34,7 +34,7 @@ app.whenReady().then(async () => {
       });
       worker!.postMessage({ id: 1, action: 'inspect', input: source });
     });
-    assert.equal(inspected.version, '26.1103.4239.0'); assert.equal(inspected.executable, 'ChatGPT.exe');
+    assert.equal(inspected.version, '26.1103.32239'); assert.equal(inspected.executable, 'ChatGPT.exe');
     assert.equal(inspected.computerUse.supported, true);
     console.log('Electron smoke passed: main-process discovery with ASAR enabled, dual-EXE worker inspection, and PE integrity.');
     await worker.terminate(); worker = undefined;

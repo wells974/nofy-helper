@@ -32,6 +32,7 @@ export async function inspect(input: string, report: Report = silent): Promise<I
   let computerUse: ComputerUseSupport;
   try { computerUse = (await planComputerUse(plan)).support; }
   catch (error) { computerUse = { supported: false, reason: error instanceof Error ? error.message : String(error), files: [], patches: 0 }; }
+  report(computerUse.reason);
   const headerHash = sha256(plan.archive.raw);
   // Store packages may ship both a launcher and the Electron host. Match their
   // embedded ASAR hash rather than requiring a single recognized filename.

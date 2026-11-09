@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { computerUseFixture, availability, runtime } from './computer-use-fixtures';
+import { computerUseFixture, availability, runtime, bootstrap } from './computer-use-fixtures';
 import { provider } from './fixtures';
 import { inspect, RepairManager } from '../src/core/manager';
 import { readArchive, entries, readEntry, verifyIntegrity } from '../src/core/asar';
@@ -68,14 +68,88 @@ test('Chinese and CUA patches can share a single archive member', async t => {
   assert.equal(app.enabled, true); assert.equal(app.availability(), 'available');
   assert.equal(app.runtime, true); assert.equal(app.restricted, false); assert.equal(app.calls.length, 3);
 });
-test('unknown versions and duplicate runtime gates refuse CUA without changing the source', async t => {
+test('accepts matching structures across older, reported Store, and future version numbers', async t => {
+  const { root, storage } = await environment(t), manager = new RepairManager(storage);
+  for (const version of ['26.1029.1', '26.1103.32239', '27.1201.0']) {
+    await computerUseFixture(root, { 'package.json': JSON.stringify({ name: 'codex', version }) });
+    const source = await inspect(root), before = await hashFile(path.join(root, 'resources/app.asar'));
+    assert.equal(source.computerUse?.supported, true, version);
+    assert.match(source.computerUse!.reason, /关键代码结构匹配，可尝试修复/);
+    const record = await manager.install(source, { computerUse: true });
+    const file = path.join(storage, record.id, 'app/resources/app.asar');
+    assert.equal((await moduleAt(file, 'webview/availability.js')).availability(), 'available');
+    assert.equal((await moduleAt(file, 'webview/runtime.js')).runtime, true);
+    assert.equal(await hashFile(path.join(root, 'resources/app.asar')), before);
+    await manager.restore(record.id);
+    assert.equal(await hashFile(file), before);
+  }
+});
+test('accepts arrow availability functions, expression arguments, direct hooks and renamed bootstrap files', async t => {
+  const { root, storage } = await environment(t);
+  const variant = 'export const checked=[];\n' + availability
+    .replace('return function(', 'return ((')
+    .replace('windowType:w}) {', 'windowType:w}) => {')
+    .replace(' }({areRequirementsPending:', ' })({areRequirementsPending:')
+    .replace('isComputerUseGateEnabled:gate', 'isComputerUseGateEnabled:(checked.push("gate"),gate)')
+    .replace('areRequiredFeaturesEnabled:required', 'areRequiredFeaturesEnabled:({value:required}).value')
+    .replace('isBrowserAndComputerUseAllowed:allowed', 'isBrowserAndComputerUseAllowed:!1');
+  await computerUseFixture(root, {
+    'package.json': '{"name":"codex","version":"26.1103.32239"}',
+    'webview/availability.js': variant,
+    'webview/runtime.js': runtime.replaceAll('(0,sdk.check)', 'sdk.check'),
+    '.vite/build/early-bootstrap.js': '',
+    '.vite/build/bootstrap-renamed.js': bootstrap.replaceAll('const u=', 'const trustedKey=').replaceAll('[u]', '[trustedKey]') + ';export const metadata={NODE_REPL_TRUSTED_CODE_PATHS:process.env.NODE_REPL_TRUSTED_CODE_PATHS};',
+    '.vite/build/runtime-reference.js': 'export const key="NODE_REPL_TRUSTED_CODE_PATHS";',
+  });
+  const source = await inspect(root);
+  assert.equal(source.computerUse?.supported, true, source.computerUse?.reason);
+  assert.ok(source.computerUse!.files.includes('.vite/build/bootstrap-renamed.js'));
+  const record = await new RepairManager(storage).install(source, { computerUse: true });
+  const file = path.join(storage, record.id, 'app/resources/app.asar'), app = await moduleAt(file, 'webview/availability.js');
+  assert.equal(app.availability(), 'available'); assert.deepEqual(app.checked, ['gate']);
+  assert.equal(app.availability({ platform: false }), 'unsupported-platform');
+  assert.equal((await moduleAt(file, 'webview/runtime.js')).runtime, true);
+});
+test('supports static string keys and shorthand arguments while preserving added availability checks', async t => {
+  const { root, storage } = await environment(t);
+  const variant = availability
+    .replace('gate=false', 'isComputerUseGateEnabled=false,extraReady=true')
+    .replace('isComputerUseGateEnabled:gate', 'isComputerUseGateEnabled')
+    .replaceAll('enabled:', '"enabled":')
+    .replace('windowType:w}', 'windowType:w,extraReady:y}')
+    .replace('windowType:windowType}', 'windowType:windowType,extraReady:extraReady}')
+    .replace('return !e?', "return !y?'disabled':!e?");
+  await computerUseFixture(root, { 'webview/availability.js': variant });
+  const source = await inspect(root);
+  assert.equal(source.computerUse?.supported, true, source.computerUse?.reason);
+  const record = await new RepairManager(storage).install(source, { computerUse: true });
+  const app = await moduleAt(path.join(storage, record.id, 'app/resources/app.asar'), 'webview/availability.js');
+  assert.equal(app.availability(), 'available');
+  assert.equal(app.availability({ extraReady: false }), 'disabled');
+  assert.equal(app.availability({ enabled: false }), 'disabled');
+});
+test('preserves native trusted path inheritance instead of adding it twice', async t => {
+  const { root, storage } = await environment(t);
+  const inherited = bootstrap.replace('[t,m]', '[t,m,process.env[u]??""]');
+  await computerUseFixture(root, { '.vite/build/early-bootstrap.js': inherited });
+  const source = await inspect(root);
+  assert.equal(source.computerUse?.supported, true); assert.equal(source.computerUse?.patches, 5);
+  const record = await new RepairManager(storage).install(source, { computerUse: true });
+  const archive = await readArchive(path.join(storage, record.id, 'app/resources/app.asar'));
+  const member = entries(archive.header).find(([name]) => name === '.vite/build/early-bootstrap.js')![1];
+  assert.equal((await readEntry(archive, member)).toString(), inherited);
+});
+test('incomplete or ambiguous structures refuse CUA regardless of version without changing the source', async t => {
   const { root, storage } = await environment(t);
   const manager = new RepairManager(storage);
   const variations: Record<string, string>[] = [
-    { 'package.json': '{"name":"codex","version":"26.1201.0"}' },
+    { 'webview/runtime.js': runtime.replace('1892382740', 'unknown-new-gate') },
     { 'webview/duplicate.js': runtime },
-    { 'webview/availability.js': availability.replace('isComputerUseGateEnabled:gate', 'isComputerUseGateEnabled:!0') },
+    { 'webview/availability.js': availability.replaceAll('isComputerUseGateEnabled', 'unknownGate') },
     { '.vite/build/early-bootstrap.js': 'export const changed=true;' },
+    { '.vite/build/duplicate.js': bootstrap },
+    { 'webview/runtime.js': runtime.replace("(0,sdk.check)('337408568')", "otherHook('337408568')") },
+    { 'webview/availability.js': availability.replace('isComputerUseGateEnabled:gate', 'isComputerUseGateEnabled:gate,isComputerUseGateEnabled:gate') },
   ];
   for (const extra of variations) {
     await computerUseFixture(root, extra);
