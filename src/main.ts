@@ -36,7 +36,7 @@ async function setup() {
   await mkdir(home, { recursive: true });
   logFile = path.join(home, 'helper.log');
   manager = new RepairBackend(path.join(home, 'repairs'), report);
-  handle('overview', async () => ({ platform: `${process.platform}-${process.arch}`, candidates: await discover(), installations: await manager.list() }));
+  handle('overview', async () => ({ platform: `${process.platform}-${process.arch}`, candidates: await discover({ report }), installations: await manager.list() }));
   handle('choose', async () => {
     assertWindows();
     const result = await dialog.showOpenDialog(window, { title: '选择 Codex 安装目录', properties: ['openDirectory'] });
