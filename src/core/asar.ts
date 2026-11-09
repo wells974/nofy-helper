@@ -1,4 +1,5 @@
-import { open, type FileHandle } from 'node:fs/promises';
+import { open, rename, rm, type FileHandle } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { sha256 } from './hash';
 import { findGatePatches, applyGatePatch, type GatePatch } from './gate';
 
@@ -7,7 +8,8 @@ export interface Entry {
   integrity?: { algorithm: string; hash: string; blockSize: number; blocks: string[] };
 }
 export interface Archive { path: string; header: Entry; raw: Buffer; dataOffset: number; length: number }
-export interface ArchivePlan { archive: Archive; file: string; patch: GatePatch; original: Buffer; modified: Buffer; version: string; packageName: string; translationFiles: number }
+export interface ArchiveChange { file: string; original: Buffer; modified: Buffer }
+export interface ArchivePlan extends ArchiveChange { archive: Archive; patch: GatePatch; version: string; packageName: string; translationFiles: number; changes?: ArchiveChange[] }
 async function readExact(file: FileHandle, size: number, at: number): Promise<Buffer> {
   const out = Buffer.alloc(size);
   let offset = 0;
@@ -90,27 +92,81 @@ export async function planArchive(path: string): Promise<ArchivePlan> {
   verifyIntegrity(match.original, match.entry);
   return { archive, file: match.file, patch: match.patch, original: match.original, modified: applyGatePatch(match.original, match.patch), version: String(pkg.version ?? '未知'), packageName: String(pkg.name), translationFiles: new Set([...translations.map(([name]) => name), ...catalogs]).size };
 }
-/** Only call on a staged copy. Fixed member size preserves offsets and all unrelated payload bytes. */
+/** Only call on a staged copy. Unchanged payload and unpacked files are preserved. */
 export async function writeArchivePatch(copyPath: string, plan: ArchivePlan): Promise<string> {
   const copied = await readArchive(copyPath);
   if (!copied.raw.equals(plan.archive.raw)) throw new Error('副本头部与检测结果不一致。');
-  const entry = entries(copied.header).find(([name]) => name === plan.file)![1];
-  const current = await readEntry(copied, entry);
-  if (!current.equals(plan.original)) throw new Error('待修改文件在检测后发生变化。');
-  const integrity = entry.integrity!;
-  integrity.hash = sha256(plan.modified);
-  integrity.blocks = [];
-  for (let offset = 0; offset < plan.modified.length; offset += integrity.blockSize) integrity.blocks.push(sha256(plan.modified.subarray(offset, offset + integrity.blockSize)));
+  const changes = [plan, ...(plan.changes ?? [])];
+  if (new Set(changes.map(change => change.file)).size !== changes.length) throw new Error('补丁包含重复文件。');
+  const targets = [];
+  for (const change of changes) {
+    const entry = entries(copied.header).find(([name]) => name === change.file)?.[1];
+    if (!entry) throw new Error('待修改的 ASAR 文件不存在。');
+    const current = await readEntry(copied, entry);
+    verifyIntegrity(current, entry);
+    if (!current.equals(change.original)) throw new Error('待修改文件在检测后发生变化。');
+    const integrity = entry.integrity!;
+    integrity.hash = sha256(change.modified);
+    integrity.blocks = [];
+    for (let offset = 0; offset < change.modified.length; offset += integrity.blockSize) integrity.blocks.push(sha256(change.modified.subarray(offset, offset + integrity.blockSize)));
+    targets.push({ change, entry });
+  }
+  if (targets.some(({ change }) => change.modified.length !== change.original.length)) {
+    // Append changed members so every unrelated member keeps its relative offset.
+    // A fresh header accommodates changed sizes and block counts without disabling integrity.
+    let offset = copied.length - copied.dataOffset;
+    for (const { change, entry } of targets) {
+      entry.offset = String(offset); entry.size = change.modified.length;
+      offset += change.modified.length;
+    }
+    const raw = Buffer.from(JSON.stringify(copied.header));
+    const padding = (4 - raw.length % 4) % 4;
+    const prefix = Buffer.alloc(16);
+    prefix.writeUInt32LE(4, 0); prefix.writeUInt32LE(8 + raw.length + padding, 4);
+    prefix.writeUInt32LE(4 + raw.length + padding, 8); prefix.writeUInt32LE(raw.length, 12);
+    const temporary = `${copyPath}.patch-${randomUUID()}`;
+    try {
+      const input = await open(copyPath, 'r');
+      try {
+        const output = await open(temporary, 'wx');
+        try {
+          const write = async (bytes: Buffer) => {
+            let at = 0;
+            while (at < bytes.length) {
+              const { bytesWritten } = await output.write(bytes.subarray(at));
+              if (!bytesWritten) throw new Error('ASAR 写入不完整。');
+              at += bytesWritten;
+            }
+          };
+          await write(Buffer.concat([prefix, raw, Buffer.alloc(padding)]));
+          for (let at = copied.dataOffset; at < copied.length; at += 1024 * 1024) await write(await readExact(input, Math.min(1024 * 1024, copied.length - at), at));
+          for (const { change } of targets) await write(change.modified);
+          await output.sync();
+        } finally { await output.close(); }
+      } finally { await input.close(); }
+      await verifyChanges(temporary, changes);
+      await rename(temporary, copyPath);
+      return sha256(raw);
+    } finally { await rm(temporary, { force: true }); }
+  }
   const json = Buffer.from(JSON.stringify(copied.header));
   if (json.length > copied.raw.length) throw new Error('新 ASAR 头部长度超限，已停止。');
   const raw = Buffer.alloc(copied.raw.length, 32); json.copy(raw);
   const handle = await open(copyPath, 'r+');
-  try { await handle.write(plan.modified, 0, plan.modified.length, range(copied, entry).offset); await handle.write(raw, 0, raw.length, 16); await handle.sync(); }
+  try {
+    for (const { change, entry } of targets) await handle.write(change.modified, 0, change.modified.length, range(copied, entry).offset);
+    await handle.write(raw, 0, raw.length, 16); await handle.sync();
+  }
   finally { await handle.close(); }
+  return verifyChanges(copyPath, changes);
+}
+async function verifyChanges(copyPath: string, changes: ArchiveChange[]): Promise<string> {
   const checked = await readArchive(copyPath);
-  const checkedEntry = entries(checked.header).find(([name]) => name === plan.file)![1];
-  const checkedBytes = await readEntry(checked, checkedEntry);
-  verifyIntegrity(checkedBytes, checkedEntry);
-  if (!checkedBytes.equals(plan.modified)) throw new Error('补丁写入后的内容校验失败。');
+  for (const change of changes) {
+    const checkedEntry = entries(checked.header).find(([name]) => name === change.file)![1];
+    const checkedBytes = await readEntry(checked, checkedEntry);
+    verifyIntegrity(checkedBytes, checkedEntry);
+    if (!checkedBytes.equals(change.modified)) throw new Error('补丁写入后的内容校验失败。');
+  }
   return sha256(checked.raw);
 }

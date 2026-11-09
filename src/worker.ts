@@ -14,9 +14,13 @@ port.on('message', async ({ id, action, input }) => {
     switch (action) {
       case 'inspect': value = await inspect(input, report); break;
       case 'list': value = await manager.list(); break;
-      case 'install': value = await manager.install(input); break;
+      case 'install': value = await manager.install(input.inspection, input.options); break;
+      case 'computerUseStatus': value = await manager.computerUseStatus(input); break;
+      case 'prepareComputerUse': value = await manager.prepareComputerUse(input); break;
+      case 'restoreComputerUseConfig': value = await manager.restoreComputerUseConfig(input); break;
       case 'restore': value = await manager.restore(input); break;
       case 'launchPath': value = await manager.launchPath(input); break;
+      case 'launchSpec': value = await manager.launchSpec(input); break;
       default: throw new Error('不支持的后台操作。');
     }
     port.postMessage({ id, value });

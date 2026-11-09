@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
-import type { Inspection, Installation } from './shared';
+import type { ComputerUseStatus, Inspection, Installation, RepairOptions } from './shared';
 
 /** Keep AST parsing and large archive hashing off Electron's main/UI thread. */
 export class RepairBackend {
@@ -32,8 +32,12 @@ export class RepairBackend {
   }
   inspect(input: string) { return this.call<Inspection>('inspect', input); }
   list() { return this.call<Installation[]>('list'); }
-  install(input: Inspection) { return this.call<Installation>('install', input); }
+  install(input: Inspection, options: RepairOptions = {}) { return this.call<Installation>('install', { inspection: input, options }); }
+  computerUseStatus(id: string) { return this.call<ComputerUseStatus>('computerUseStatus', id); }
+  prepareComputerUse(id: string) { return this.call<ComputerUseStatus>('prepareComputerUse', id); }
+  restoreComputerUseConfig(id: string) { return this.call<void>('restoreComputerUseConfig', id); }
   restore(id: string) { return this.call<Installation>('restore', id); }
   launchPath(id: string) { return this.call<string>('launchPath', id); }
+  launchSpec(id: string) { return this.call<{ executable: string; computerUse: boolean }>('launchSpec', id); }
   close() { void this.worker.terminate(); }
 }

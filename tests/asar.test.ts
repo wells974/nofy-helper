@@ -8,7 +8,7 @@ import { planArchive, writeArchivePatch } from '../src/core/asar';
 import { sha256 } from '../src/core/hash';
 import { archive, provider } from './fixtures';
 
-test('round-trips archives produced by official @electron/asar, including unpacked payload', async t => {
+for (const grow of [false, true]) test(`round-trips official @electron/asar with ${grow ? 'a growing member and header' : 'fixed member size'}, including unpacked payload`, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'nofy-official-asar-')); t.after(() => rm(dir, { recursive: true, force: true }));
   const src = path.join(dir, 'source'), target = path.join(dir, 'app.asar');
   // The official ASAR API splits member paths by the host's path.sep.
@@ -21,6 +21,7 @@ test('round-trips archives produced by official @electron/asar, including unpack
   await officialAsar.createPackageWithOptions(src, target, { unpack: '*.bin' });
   const originalHeader = officialAsar.getRawHeader(target).headerString;
   const plan = await planArchive(target); assert.equal(sha256(plan.archive.raw), sha256(originalHeader));
+  if (grow) plan.modified = Buffer.concat([plan.modified, Buffer.from('/*' + 'x'.repeat(5 * 1024 * 1024) + '*/')]);
   const newHash = await writeArchivePatch(target, plan);
   officialAsar.uncache(target);
   assert.equal(sha256(officialAsar.getRawHeader(target).headerString), newHash);
