@@ -1,0 +1,159 @@
+import { cp, copyFile, mkdir, readFile, readdir, realpath, rename, rm, stat, lstat, writeFile, statfs } from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { planArchive, readArchive, writeArchivePatch } from './asar';
+import { hashFile, sha256 } from './hash';
+import { integrityResource, patchExecutable } from './pe';
+import type { Inspection, Installation } from '../shared';
+
+const asar = (root: string) => path.join(root, 'resources', 'app.asar');
+export type Report = (message: string) => void;
+const silent: Report = () => {};
+
+export async function resolveRoot(input: string): Promise<string> {
+  let root = await realpath(input);
+  if ((await stat(root)).isFile()) root = path.dirname(root);
+  for (const candidate of [root, path.join(root, 'app')]) {
+    try { if ((await stat(asar(candidate))).isFile()) return candidate; } catch { /* try Store app subdirectory */ }
+  }
+  throw new Error('未找到 resources/app.asar。请选择 Codex 安装目录或 EXE 文件。');
+}
+export async function inspect(input: string, report: Report = silent): Promise<Inspection> {
+  const root = await resolveRoot(input);
+  report('读取应用包并定位翻译加载器…');
+  const plan = await planArchive(asar(root));
+  const names = (await readdir(root)).filter(name => /^(?:codex|chatgpt)\.exe$/i.test(name));
+  if (names.length !== 1) throw new Error('未找到唯一的 Codex.exe / ChatGPT.exe。');
+  const executable = names[0], exe = await readFile(path.join(root, executable));
+  const headerHash = sha256(plan.archive.raw);
+  if (integrityResource(exe).hash !== headerHash) throw new Error('原始 EXE 与应用包哈希不一致，停止修复。');
+  report('核对原始文件指纹…');
+  return { root, executable, headerHash, sourceHash: await hashFile(asar(root)), executableHash: sha256(exe), version: plan.version, packageName: plan.packageName, translationFiles: plan.translationFiles, gateFile: plan.file, gateOffset: plan.patch.start, store: /(?:^|[\\/])WindowsApps(?:[\\/]|$)/i.test(root) };
+}
+
+export class RepairManager {
+  private busy = false;
+  constructor(readonly storage: string, private readonly report: Report = silent, private readonly assertStopped: () => Promise<void> = async () => {}) {}
+  private folder(id: string) {
+    if (!/^[a-f\d]{8}-[a-f\d-]{27}$/.test(id)) throw new Error('无效的修复记录。');
+    return path.join(this.storage, id);
+  }
+  private async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.busy) throw new Error('另一个操作正在进行，请等待完成。');
+    this.busy = true;
+    try { return await fn(); } finally { this.busy = false; }
+  }
+  private async manifest(id: string): Promise<Installation> {
+    const folder = this.folder(id);
+    await this.noLinks(folder, ['', 'manifest.json']);
+    const value = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')) as Installation;
+    if (value.id !== id || !['ready', 'restoring', 'restored'].includes(value.status) || !/^(?:codex|chatgpt)\.exe$/i.test(value.source?.executable) || typeof value.source?.root !== 'string' || !path.isAbsolute(value.source.root) || typeof value.source.version !== 'string' || typeof value.createdAt !== 'string' || ![value.source.sourceHash, value.source.executableHash, value.source.headerHash, value.patchedAsarHash, value.patchedExeHash, value.patchedHeaderHash].every(hash => typeof hash === 'string' && /^[a-f\d]{64}$/.test(hash))) throw new Error('修复记录损坏。');
+    return value;
+  }
+  private async noLinks(folder: string, relativePaths: string[]) {
+    for (const item of relativePaths) if ((await lstat(path.join(folder, item))).isSymbolicLink()) throw new Error('修复目录包含符号链接或目录联接，停止操作。');
+  }
+  private async save(folder: string, value: Installation) {
+    const temp = path.join(folder, `manifest-${randomUUID()}.tmp`);
+    await writeFile(temp, JSON.stringify(value, null, 2), { flag: 'wx' });
+    await rename(temp, path.join(folder, 'manifest.json'));
+  }
+  async list(): Promise<Installation[]> {
+    await mkdir(this.storage, { recursive: true });
+    const result: Installation[] = [];
+    for (const name of await readdir(this.storage)) {
+      if (!/^[a-f\d]{8}-[a-f\d-]{27}$/.test(name)) continue;
+      try { result.push(await this.manifest(name)); } catch { this.report(`无法读取修复记录 ${name}，已跳过。`); }
+    }
+    return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  async install(expected: Inspection): Promise<Installation> {
+    return this.exclusive(async () => {
+      await this.assertStopped();
+      await mkdir(this.storage, { recursive: true });
+      const source = await inspect(expected.root, this.report);
+      if (source.sourceHash !== expected.sourceHash || source.executableHash !== expected.executableHash || source.root !== expected.root) throw new Error('安装文件在检测后发生变化，请重新检测。');
+      const storageReal = await realpath(this.storage);
+      const relative = path.relative(source.root, storageReal);
+      if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) throw new Error('副本存储目录不能位于原安装目录内。');
+      if (path.relative(storageReal, source.root).split(path.sep)[0] !== '..' && !path.isAbsolute(path.relative(storageReal, source.root))) throw new Error('不能再次修补已经托管的应用副本。');
+      const total = await this.treeSize(source.root);
+      const free = await statfs(this.storage);
+      if (free.bavail * free.bsize < total * 2 + 256 * 1024 * 1024) throw new Error('磁盘空间不足，需要容纳应用副本和原文件备份。');
+      const id = randomUUID(), stage = path.join(this.storage, `.staging-${id}`), folder = this.folder(id);
+      await mkdir(stage);
+      try {
+        this.report('创建独立应用副本，官方安装保持不变…');
+        await cp(source.root, path.join(stage, 'app'), { recursive: true, errorOnExist: true, force: false, filter: async (src) => {
+          const info = await lstat(src);
+          if (info.isSymbolicLink()) throw new Error('安装目录含符号链接或目录联接，第一版不支持。');
+          if (!info.isDirectory() && !info.isFile()) throw new Error('安装目录包含不支持的特殊文件。');
+          return true;
+        } });
+        const app = path.join(stage, 'app'), backup = path.join(stage, 'originals');
+        await mkdir(backup);
+        await copyFile(asar(app), path.join(backup, 'app.asar'));
+        await copyFile(path.join(app, source.executable), path.join(backup, source.executable));
+        if (await hashFile(asar(app)) !== source.sourceHash || await hashFile(path.join(app, source.executable)) !== source.executableHash) throw new Error('复制过程中源文件发生变化，请重新检测。');
+        const plan = await planArchive(asar(app));
+        this.report('在副本中启用翻译加载器，并更新完整性校验…');
+        const patchedHeaderHash = await writeArchivePatch(asar(app), plan);
+        const patchedExe = patchExecutable(await readFile(path.join(app, source.executable)), source.headerHash, patchedHeaderHash);
+        await writeFile(path.join(app, source.executable), patchedExe);
+        const installation: Installation = { id, createdAt: new Date().toISOString(), source, status: 'ready', patchedAsarHash: await hashFile(asar(app)), patchedExeHash: sha256(patchedExe), patchedHeaderHash };
+        await this.assertStopped();
+        // Detect updater races before publishing the copy.
+        if (await hashFile(asar(source.root)) !== source.sourceHash || await hashFile(path.join(source.root, source.executable)) !== source.executableHash) throw new Error('官方应用正在更新，请更新完成后重试。');
+        await this.save(stage, installation);
+        await rename(stage, folder);
+        this.report('修复副本已就绪。请从本工具启动，并在应用中选择简体中文。');
+        return installation;
+      } catch (error) { await rm(stage, { recursive: true, force: true }).catch(() => {}); throw error; }
+    });
+  }
+  private async treeSize(root: string): Promise<number> {
+    let total = 0;
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      const item = path.join(root, entry.name);
+      if (entry.isSymbolicLink()) throw new Error('第一版不处理符号链接或目录联接。');
+      if (entry.isDirectory()) total += await this.treeSize(item);
+      else if (entry.isFile()) total += (await stat(item)).size;
+      else throw new Error('安装目录包含不支持的特殊文件。');
+    }
+    return total;
+  }
+  async launchPath(id: string): Promise<string> {
+    return this.exclusive(async () => {
+      await this.assertStopped();
+      const record = await this.manifest(id);
+      if (record.status !== 'ready') throw new Error('该副本已恢复或恢复尚未完成，请使用官方应用。');
+      await this.noLinks(this.folder(id), ['app', 'app/resources', 'app/resources/app.asar', `app/${record.source.executable}`]);
+      if (await hashFile(asar(record.source.root)) !== record.source.sourceHash || await hashFile(path.join(record.source.root, record.source.executable)) !== record.source.executableHash) throw new Error('官方应用已更新，请重新检测并创建修复副本。');
+      const app = path.join(this.folder(id), 'app');
+      if (await hashFile(asar(app)) !== record.patchedAsarHash || await hashFile(path.join(app, record.source.executable)) !== record.patchedExeHash) throw new Error('修复副本被修改或更新，请重新创建。');
+      if (sha256((await readArchive(asar(app))).raw) !== integrityResource(await readFile(path.join(app, record.source.executable))).hash) throw new Error('副本完整性信息不匹配。');
+      return path.join(app, record.source.executable);
+    });
+  }
+  async restore(id: string): Promise<Installation> {
+    return this.exclusive(async () => {
+      await this.assertStopped();
+      const folder = this.folder(id), record = await this.manifest(id), backup = path.join(folder, 'originals');
+      if (record.status === 'restored') return record;
+      await this.noLinks(folder, ['app', 'app/resources', 'app/resources/app.asar', `app/${record.source.executable}`, 'originals', 'originals/app.asar', `originals/${record.source.executable}`]);
+      if (await hashFile(path.join(backup, 'app.asar')) !== record.source.sourceHash || await hashFile(path.join(backup, record.source.executable)) !== record.source.executableHash) throw new Error('原始备份校验失败，停止恢复。');
+      // Persist intent before writing. Interrupted restores remain non-launchable and retryable.
+      record.status = 'restoring'; await this.save(folder, record);
+      this.report('从备份恢复副本中的原始文件…');
+      const app = path.join(folder, 'app');
+      for (const [from, to] of [[path.join(backup, 'app.asar'), asar(app)], [path.join(backup, record.source.executable), path.join(app, record.source.executable)]]) {
+        const temp = `${to}.restore-${randomUUID()}`;
+        await copyFile(from, temp); await rename(temp, to);
+      }
+      if (await hashFile(asar(app)) !== record.source.sourceHash || await hashFile(path.join(app, record.source.executable)) !== record.source.executableHash) throw new Error('恢复后的文件校验失败，可重新点击恢复。');
+      record.status = 'restored'; await this.save(folder, record);
+      this.report('副本已恢复原始文件。官方安装和个人配置未修改。');
+      return record;
+    });
+  }
+}

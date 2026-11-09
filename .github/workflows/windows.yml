@@ -1,0 +1,22 @@
+name: Windows validation
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run smoke
+      - run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nofy-helper-windows-x64
+          path: release/*Setup.exe
