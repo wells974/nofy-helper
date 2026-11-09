@@ -35,6 +35,42 @@ test('refuses ambiguous providers without publishing a copy', async t => {
   await assert.rejects(() => inspect(source), /2 个/);
   assert.deepEqual(await readdir(storage).catch(() => []), []);
 });
+test('selects the desktop EXE by ASAR integrity when a second named EXE is a CLI', async t => {
+  const { source } = await environment(t);
+  await writeFile(path.join(source, 'ChatGPT.exe'), 'CLI without an Electron integrity resource');
+  const result = await inspect(source);
+  assert.equal(result.executable, 'Codex.exe');
+});
+test('ignores a mismatched named EXE and preserves the selected executable through repair and restore', async t => {
+  const { source, manager } = await environment(t);
+  const desktop = await readFile(path.join(source, 'Codex.exe'));
+  await writeFile(path.join(source, 'ChatGPT.exe'), desktop);
+  await writeFile(path.join(source, 'Codex.exe'), executable(sha256('different archive')));
+  const result = await inspect(source);
+  assert.equal(result.executable, 'ChatGPT.exe');
+  const record = await manager.install(result);
+  assert.equal(path.basename(await manager.launchPath(record.id)), 'ChatGPT.exe');
+  assert.equal((await manager.restore(record.id)).status, 'restored');
+});
+test('refuses two executables that both match the ASAR and reports the filenames', async t => {
+  const { source } = await environment(t);
+  await writeFile(path.join(source, 'ChatGPT.exe'), await readFile(path.join(source, 'Codex.exe')));
+  const messages: string[] = [];
+  await assert.rejects(() => inspect(source, message => messages.push(message)), /多个.*Codex\.exe.*ChatGPT\.exe|多个.*ChatGPT\.exe.*Codex\.exe/);
+  assert.ok(messages.some(message => message.includes('Codex.exe') && message.includes('ChatGPT.exe')));
+});
+test('reports why each recognized executable was rejected when none match', async t => {
+  const { source } = await environment(t);
+  await writeFile(path.join(source, 'Codex.exe'), 'launcher without an Electron integrity resource');
+  await writeFile(path.join(source, 'ChatGPT.exe'), executable(sha256('other archive')));
+  await assert.rejects(() => inspect(source), error => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /未找到.*完整性匹配/);
+    assert.match(error.message, /Codex\.exe.*不是有效的 Windows EXE/);
+    assert.match(error.message, /ChatGPT\.exe.*哈希不一致/);
+    return true;
+  });
+});
 test('source update between inspection and install is rejected', async t => {
   const { source, manager } = await environment(t); const before = await inspect(source);
   await fixture(source, { 'untouched.txt': 'updated' }); await assert.rejects(() => manager.install(before), /检测后发生变化/);

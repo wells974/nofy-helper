@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import { Worker } from 'node:worker_threads';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -14,6 +14,9 @@ app.whenReady().then(async () => {
   let worker: Worker | undefined;
   try {
     const source = path.join(temp, '安装目录 with spaces'); await fixture(source);
+    // Match the Store layout: a small Codex launcher plus the Electron host.
+    await writeFile(path.join(source, 'ChatGPT.exe'), await readFile(path.join(source, 'Codex.exe')));
+    await writeFile(path.join(source, 'Codex.exe'), 'launcher without an Electron integrity resource');
     // Discovery runs in the main process, where Electron's ASAR support stays enabled.
     (process as NodeJS.Process & { noAsar?: boolean }).noAsar = false;
     assert.equal((await stat(path.join(source, 'resources', 'app.asar'))).isDirectory(), true);
@@ -31,8 +34,8 @@ app.whenReady().then(async () => {
       });
       worker!.postMessage({ id: 1, action: 'inspect', input: source });
     });
-    assert.equal(inspected.version, '26.1103.test'); assert.equal(inspected.executable, 'Codex.exe');
-    console.log('Electron smoke passed: main-process discovery with ASAR enabled, raw ASAR worker inspection, and PE integrity.');
+    assert.equal(inspected.version, '26.1103.test'); assert.equal(inspected.executable, 'ChatGPT.exe');
+    console.log('Electron smoke passed: main-process discovery with ASAR enabled, dual-EXE worker inspection, and PE integrity.');
     await worker.terminate(); worker = undefined;
     (process as NodeJS.Process & { noAsar?: boolean }).noAsar = true;
     await rm(temp, { recursive: true, force: true }); app.exit(0);

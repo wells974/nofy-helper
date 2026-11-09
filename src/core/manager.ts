@@ -20,15 +20,35 @@ export async function resolveRoot(input: string): Promise<string> {
 }
 export async function inspect(input: string, report: Report = silent): Promise<Inspection> {
   const root = await resolveRoot(input);
+  const files = (await readdir(root, { withFileTypes: true })).filter(entry => entry.isFile() && /\.exe$/i.test(entry.name)).map(entry => entry.name);
+  const names = files.filter(name => /^(?:codex|chatgpt)\.exe$/i.test(name));
+  report(`安装目录中的 EXE：${files.join('、') || '无'}。`);
+  if (!names.length) throw new Error(`未找到 Codex.exe / ChatGPT.exe。目录中的 EXE：${files.join('、') || '无'}。`);
   report('读取应用包并定位翻译加载器…');
   const plan = await planArchive(asar(root));
-  const names = (await readdir(root)).filter(name => /^(?:codex|chatgpt)\.exe$/i.test(name));
-  if (names.length !== 1) throw new Error('未找到唯一的 Codex.exe / ChatGPT.exe。');
-  const executable = names[0], exe = await readFile(path.join(root, executable));
   const headerHash = sha256(plan.archive.raw);
-  if (integrityResource(exe).hash !== headerHash) throw new Error('原始 EXE 与应用包哈希不一致，停止修复。');
+  // Store packages may ship both a launcher and the Electron host. Match their
+  // embedded ASAR hash rather than requiring a single recognized filename.
+  const matches: { executable: string; executableHash: string }[] = [];
+  const failures: string[] = [];
+  for (const executable of names) {
+    try {
+      const exe = await readFile(path.join(root, executable));
+      if (integrityResource(exe).hash !== headerHash) throw new Error('原始 EXE 与应用包哈希不一致');
+      matches.push({ executable, executableHash: sha256(exe) });
+      report(`${executable}：EXE 与 ASAR 完整性匹配。`);
+    } catch (error) {
+      const reason = `${executable}：${error instanceof Error ? error.message : String(error)}`;
+      failures.push(reason);
+      report(`跳过 ${reason}`);
+    }
+  }
+  if (!matches.length) throw new Error(`未找到与 resources/app.asar 完整性匹配的 EXE，停止修复。${failures.join('；')}`);
+  if (matches.length > 1) throw new Error(`找到多个与 resources/app.asar 完整性匹配的 EXE，无法确定启动程序，停止修复：${matches.map(match => match.executable).join('、')}。`);
+  const { executable, executableHash } = matches[0];
+  report(`选定应用程序：${executable}。`);
   report('核对原始文件指纹…');
-  return { root, executable, headerHash, sourceHash: await hashFile(asar(root)), executableHash: sha256(exe), version: plan.version, packageName: plan.packageName, translationFiles: plan.translationFiles, gateFile: plan.file, gateOffset: plan.patch.start, store: /(?:^|[\\/])WindowsApps(?:[\\/]|$)/i.test(root) };
+  return { root, executable, headerHash, sourceHash: await hashFile(asar(root)), executableHash, version: plan.version, packageName: plan.packageName, translationFiles: plan.translationFiles, gateFile: plan.file, gateOffset: plan.patch.start, store: /(?:^|[\\/])WindowsApps(?:[\\/]|$)/i.test(root) };
 }
 
 export class RepairManager {
