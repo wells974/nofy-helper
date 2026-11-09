@@ -15,14 +15,16 @@
     "dev": "npm run build && node scripts/start.mjs",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "check": "npm run typecheck && npm test && npm run build",
     "pack:win": "npm run check && electron-builder --win --x64 --dir",
-    "dist:win": "npm run check && electron-builder --win nsis --x64",
+    "dist:win": "npm run check && electron-builder --win nsis --x64 --publish never",
     "ui:prepare": "node scripts/build.mjs --ui",
     "ui:preview": "npm run ui:prepare && node scripts/preview-ui.mjs",
-    "test:ui": "node tests/ui.spec.mjs"
+    "test:ui": "node tests/ui.spec.mjs",
+    "dist:mac": "npm run check && electron-builder --mac --publish never",
+    "dist:linux": "npm run check && electron-builder --linux --publish never"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -78,11 +80,26 @@
     "icon": "assets/branding/nofy-helper-app.png",
     "mac": {
       "icon": "assets/branding/nofy-helper-app.png",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "nofy-helper-${version}-mac-${arch}.${ext}"
     },
     "linux": {
       "icon": "assets/branding/nofy-helper-app.png",
-      "category": "Utility"
+      "category": "Utility",
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "artifactName": "nofy-helper-${version}-linux-${arch}.${ext}"
     }
+  },
+  "homepage": "https://github.com/wells974/nofy-helper",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wells974/nofy-helper.git"
   }
 }

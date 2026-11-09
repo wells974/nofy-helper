@@ -22,7 +22,37 @@ npm run dist:win
 
 macOS 上的 `npm run dev` 会使用已安装的 Electron 运行时，在 `work/desktop/` 生成带有产品名称和图标的本地 `.app`，然后启动它。这样 Dock、菜单栏和系统中的名称均为 `nofy-helper`。本地预览只做临时签名，不发布、不公证；Windows 和 Linux 继续直接启动 Electron。修改代码后退出预览并重新运行该命令即可。
 
-`npm install` 会通过 Electron 官方安装器获取开发运行时。首次安装和打包需要网络；生成的工具对本地应用执行检测与修复时无需下载脚本或依赖。`npm run pack:win` 只输出 Windows 解包目录；`npm run dist:win` 输出 NSIS 安装包。建议在 Windows 上打包，仓库提供 GitHub Actions 工作流。安装包暂未配置发布者签名。
+`npm install` 会通过 Electron 官方安装器获取开发运行时。首次安装和打包需要网络；生成的工具对本地应用执行检测与修复时无需下载脚本或依赖。`npm run pack:win` 只输出 Windows 解包目录；`npm run dist:win` 输出 NSIS 安装包。建议在目标系统上打包；仓库提供 Windows 验证和多平台 Release 工作流。安装包暂未配置发布者签名。
+
+## GitHub 自动发布
+
+仓库：`https://github.com/wells974/nofy-helper`。`.github/workflows/release.yml` 在推送 `v*` 标签时执行版本校验、四路构建，全部通过后发布 GitHub Release。Windows 验证工作流仅由 PR 事件或手动运行触发；直接推送 `main` 不触发工作流。
+
+| 构建任务 | 安装包 |
+| --- | --- |
+| Windows x64 | `nofy-helper-版本-x64-setup.exe` |
+| macOS Apple Silicon | `nofy-helper-版本-mac-arm64.dmg`、`.zip` |
+| macOS Intel | `nofy-helper-版本-mac-x64.dmg`、`.zip` |
+| Linux x64 | `nofy-helper-版本-linux-x64.AppImage`、`.tar.gz` |
+
+发布前必须收齐七个非空安装包，并生成 `SHA256SUMS.txt`。任何构建失败都不会发布；上传期间保持草稿，全部上传成功后才公开。重跑可以恢复草稿，但不会覆盖已经公开的同版本 Release。带 `-beta.1` 等后缀的版本标记为预发布。
+
+首次发布：
+
+1. 将本次工作流、脚本、测试和 package.json 变更提交并推送到 `main`。
+2. 打开仓库 **Actions → Release → Run workflow**，选择 `main` 手动试跑。手动运行只生成可下载 Artifacts，不创建 Release。
+3. 四路试跑通过后，确认 `package.json`、`package-lock.json` 都是 `0.1.0`，再执行：
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+后续更新先用 `npm version 0.1.1 --no-git-tag-version` 同步两个版本文件，提交并推送代码后再创建、推送 `v0.1.1`。标签必须与两个文件的版本完全一致；推送不匹配的标签会在打包前失败。
+
+此工作流使用 GitHub 托管的构建机，不需要自己的构建机或个人 Token。只有发布任务授予 `contents: write`；如果组织策略限制 Actions 写入，需要管理员允许该仓库发布 Release。下载地址：`https://github.com/wells974/nofy-helper/releases`。
+
+当前 CI 生成的是 Windows 未签名包、macOS 临时签名且未公证包。后续有发布证书时再接入 Secrets 和签名／公证；当前配置未提供自动更新功能。各系统安装包不代表修复功能跨平台，中文修复依然仅支持 Windows x64。
 
 ## 使用流程
 
@@ -102,4 +132,4 @@ npm run test:ui
 
 `npm run ui:prepare` 只编译渲染层，方便配合既有 Electron 开发输出查看；完整开发启动仍使用 `npm run dev`。
 
-设计方向、官方参考图与实际验收截图位于 `work/design/`。界面改版未重新生成 Windows 发布包，`release/` 内旧产物不代表当前界面；发布前重新运行打包命令。
+设计方向、官方参考图与实际验收截图位于 `work/design/`。`release/` 是本地产物目录；对外发布以通过 GitHub Release 工作流生成的版本为准。
