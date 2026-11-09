@@ -45,6 +45,7 @@ async function setup() {
   handle('inspect', async (input: unknown) => {
     assertWindows(); latest = null;
     if (typeof input !== 'string' || !input.trim() || input.length > 4096) throw new Error('请选择或填写有效安装路径。');
+    report(`检测安装路径：${input.trim()}`);
     latest = await manager.inspect(input.trim()); return latest;
   }, true);
   handle('repair', async () => {

@@ -56,8 +56,9 @@ test('finds local installs after both PowerShell sources fail and reports the fa
   const messages: string[] = [];
   const found = await discover({ ...options, env: { LOCALAPPDATA: dir }, query: async () => { throw new Error('blocked'); }, report: message => messages.push(message) });
   assert.deepEqual(found.map(item => item.path), [expected]);
-  assert.equal(messages.length, 2);
-  assert.ok(messages.every(message => message.includes('blocked')));
+  assert.equal(messages.filter(message => message.includes('blocked')).length, 2);
+  assert.ok(messages.some(message => message.includes(expected)));
+  assert.ok(messages.some(message => message.includes('自动查找完成，找到 1 个安装')));
 });
 
 test('finds direct LocalAppData installs and the newest valid version directory', async t => {

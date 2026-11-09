@@ -1,10 +1,11 @@
 import { app } from 'electron';
 import { Worker } from 'node:worker_threads';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { fixture } from './fixtures';
+import { discover } from '../src/windows';
 
 (process as NodeJS.Process & { noAsar?: boolean }).noAsar = true;
 
@@ -12,7 +13,13 @@ app.whenReady().then(async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'nofy-electron-smoke-'));
   let worker: Worker | undefined;
   try {
-    const source = path.join(temp, 'source'); await fixture(source);
+    const source = path.join(temp, '安装目录 with spaces'); await fixture(source);
+    // Discovery runs in the main process, where Electron's ASAR support stays enabled.
+    (process as NodeJS.Process & { noAsar?: boolean }).noAsar = false;
+    assert.equal((await stat(path.join(source, 'resources', 'app.asar'))).isDirectory(), true);
+    const candidates = await discover({ platform: 'win32', env: {}, query: async script => script.includes('Get-AppxPackage') ? JSON.stringify([{ Name: 'OpenAI.Codex', InstallLocation: source }]) : '[]' });
+    assert.deepEqual(candidates.map(item => item.path), [source]);
+    assert.equal((process as NodeJS.Process & { noAsar?: boolean }).noAsar, false, 'discovery must preserve ASAR support for the helper UI');
     worker = new Worker(path.resolve('dist/worker.cjs'), { workerData: { storage: path.join(temp, 'records') } });
     const inspected: any = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Worker inspection timed out')), 15000);
@@ -25,11 +32,13 @@ app.whenReady().then(async () => {
       worker!.postMessage({ id: 1, action: 'inspect', input: source });
     });
     assert.equal(inspected.version, '26.1103.test'); assert.equal(inspected.executable, 'Codex.exe');
-    console.log('Electron worker smoke passed: raw ASAR, PE integrity, and provider inspection.');
+    console.log('Electron smoke passed: main-process discovery with ASAR enabled, raw ASAR worker inspection, and PE integrity.');
     await worker.terminate(); worker = undefined;
+    (process as NodeJS.Process & { noAsar?: boolean }).noAsar = true;
     await rm(temp, { recursive: true, force: true }); app.exit(0);
   } catch (error) {
     console.error(error); if (worker) await worker.terminate();
+    (process as NodeJS.Process & { noAsar?: boolean }).noAsar = true;
     await rm(temp, { recursive: true, force: true }); app.exit(1);
   }
 });

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from './raw-fs';
 import type { Candidate } from './shared';
 const exec = promisify(execFile);
 const powershell = () => path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -41,6 +41,7 @@ ConvertTo-Json -InputObject @($found) -Compress`;
 
 export async function discover(options: DiscoveryOptions = {}): Promise<Candidate[]> {
   if ((options.platform ?? process.platform) !== 'win32') return [];
+  options.report?.('开始查找 Codex / ChatGPT 安装（原始文件系统检测）…');
   const env = options.env ?? process.env;
   const runQuery = options.query ?? query;
   const candidates: Candidate[] = [];
@@ -50,11 +51,14 @@ export async function discover(options: DiscoveryOptions = {}): Promise<Candidat
     try {
       if (result.status === 'rejected') throw result.reason;
       const parsed: unknown = result.value ? JSON.parse(result.value.replace(/^\uFEFF/, '')) : [];
+      let count = 0;
       for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
         if (item && typeof item.InstallLocation === 'string' && item.InstallLocation.trim()) {
           candidates.push({ path: item.InstallLocation.trim().replace(/^"(.*)"$/, '$1'), label: `${typeof item.Name === 'string' ? item.Name : 'Codex / ChatGPT'} · ${source}` });
+          count++;
         }
       }
+      options.report?.(`${source} 返回 ${count} 条安装位置。`);
     } catch (error) {
       options.report?.(`${source} 安装查询失败，将继续检查本地目录：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -73,7 +77,11 @@ export async function discover(options: DiscoveryOptions = {}): Promise<Candidat
   const visited = new Set<string>();
   for (const candidate of candidates) {
     let root = candidate.path;
-    try { if ((await stat(root)).isFile()) root = path.dirname(root); } catch { continue; }
+    try { if ((await stat(root)).isFile()) root = path.dirname(root); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') options.report?.(`无法读取安装位置 ${root}：${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
     const key = path.normalize(root).toLowerCase();
     if (visited.has(key)) continue;
     visited.add(key);
@@ -81,15 +89,23 @@ export async function discover(options: DiscoveryOptions = {}): Promise<Candidat
       .filter(entry => entry.isDirectory() && /^app-\d[\w.-]*$/i.test(entry.name))
       .sort((a, b) => b.name.localeCompare(a.name, 'en', { numeric: true }))
       .map(entry => path.join(root, entry.name));
+    let matched = false;
     for (const folder of [root, path.join(root, 'app'), path.join(root, 'bin'), ...versions]) {
       try {
         if (!(await stat(path.join(folder, 'resources', 'app.asar'))).isFile()) continue;
         const names = await readdir(folder);
         if (!names.some(name => /^(codex|chatgpt)\.exe$/i.test(name))) continue;
         found.push({ ...candidate, path: folder });
+        options.report?.(`找到安装：${folder}`);
+        matched = true;
         break;
-      } catch { /* missing or inaccessible installation */ }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') options.report?.(`无法检查安装资源 ${folder}：${error instanceof Error ? error.message : String(error)}`);
+      }
     }
+    if (!matched) options.report?.(`跳过安装位置 ${root}：未找到同时包含 resources/app.asar 和 Codex.exe / ChatGPT.exe 的目录。`);
   }
-  return found.filter((item, i) => found.findIndex(other => other.path.toLowerCase() === item.path.toLowerCase()) === i);
+  const unique = found.filter((item, i) => found.findIndex(other => other.path.toLowerCase() === item.path.toLowerCase()) === i);
+  options.report?.(`自动查找完成，找到 ${unique.length} 个安装。`);
+  return unique;
 }
