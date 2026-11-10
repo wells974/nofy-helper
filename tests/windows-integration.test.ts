@@ -28,6 +28,9 @@ test('Windows native pipe probe distinguishes a real listening pipe from a close
   t.after(() => { if (server.listening) server.close(); });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(pipe, resolve); });
   assert.equal(await probeNativePipe(pipe), 'active');
+  assert.equal(await probeNativePipe(pipe.toUpperCase()), 'active', 'Windows pipe names are case-insensitive');
+  assert.equal(await probeNativePipe(`${pipe}-absent`), 'missing', 'a similar name must not match the listening pipe');
+  assert.equal(await probeNativePipe(pipe), 'active', 'repeated inspection must leave the server listening');
   assert.equal(connections, 0, 'probing must not consume a native service connection');
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   assert.equal(await probeNativePipe(pipe), 'missing');

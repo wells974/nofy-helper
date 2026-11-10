@@ -8,13 +8,22 @@ export type PipeProbe = (pipe: string) => Promise<'active' | 'missing' | 'unknow
 export interface PipeState { state: 'absent' | 'active' | 'stale' | 'unknown'; detail: string }
 export interface PipeConfigPlan extends PipeState { cleaned?: Buffer }
 
-// Same existence check as the upstream Get-ComputerUsePipeConfigState; never connects
-// to or creates a pipe, and never persists a process-specific address.
+// Unlike upstream's Test-Path, enumerate names without opening the target pipe.
+// Windows PowerShell's .NET Framework Directory.GetFiles uses FindFirstFile /
+// FindNextFile (microsoft/referencesource, mscorlib/system/io/filesystemenumerable.cs).
+// Test-Path opened two client connections in the Windows regression test.
 export const probeNativePipe: PipeProbe = async pipe => {
   if (process.platform !== 'win32') return 'unknown';
   try {
     const stdout = await queryPowerShell(
-      "if (Test-Path -LiteralPath $env:NOFY_PIPE_PROBE_PATH) { 'active' } else { 'missing' }",
+      String.raw`$found = $false
+foreach ($name in [System.IO.Directory]::GetFiles('\\.\pipe\')) {
+  if ([string]::Equals($name, $env:NOFY_PIPE_PROBE_PATH, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $found = $true
+    break
+  }
+}
+if ($found) { 'active' } else { 'missing' }`,
       { env: withEnvironment(process.env, { NOFY_PIPE_PROBE_PATH: pipe }), timeout: 10000, maxBuffer: 4096 });
     return stdout.trim() === 'active' ? 'active' : stdout.trim() === 'missing' ? 'missing' : 'unknown';
   } catch { return 'unknown'; }
