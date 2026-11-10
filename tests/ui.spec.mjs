@@ -105,7 +105,7 @@ try {
     await page.getByText('已发出启动请求。Computer Use 尚未确认就绪，可在 Codex 内检查插件与 Any App 设置。', { exact: true }).waitFor();
     await button('检查 Computer Use').click();
     await button('准备 Computer Use').click();
-    await page.getByText('运行环境就绪', { exact: true }).waitFor();
+    await page.getByText('基础检查通过', { exact: true }).waitFor();
     await button('启动副本').click();
     assert.equal(await page.evaluate(() => window.uiTest.calls.includes('prepareComputerUse')), true);
     await page.getByText('已发出启动请求。请开启 Any App，在新会话中验证截图与窗口操作。', { exact: true }).waitFor();
@@ -131,7 +131,7 @@ try {
     await page.goto(`${base}?state=cua-installed`);
     await page.waitForFunction(() => document.querySelector('#install-path')?.disabled === false);
     await button('检查 Computer Use').click();
-    await page.getByText('运行环境就绪', { exact: true }).waitFor();
+    await page.getByText('基础检查通过', { exact: true }).waitFor();
     assert.equal(await button('准备 Computer Use').count(), 0, 'an officially enabled plugin is not reinstalled for a cache advisory');
     assert.equal(await button('启动副本').isEnabled(), true);
     await button('运行环境详情').click();

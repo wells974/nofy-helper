@@ -27,9 +27,27 @@
 
 新版本 Computer Use 可使用描述文件插件及独立 `cua_node` 运行时，统一 CUA 清单交由 Codex 原有代码生成；工具不伪造旧版 `computer-use-client.mjs` 或统一 MCP 清单。
 
+## Native pipe unavailable / os error 2
+
+依据同一上游提交的 [Computer Use Task Fails Before App Interaction](https://github.com/chen0416ccc-cpu/codex-windows-fast-patch-skill/blob/83d564dd9e9d429ca1a415cd9791fab9922e31c8/references/restriction-debug-cases.md#computer-use-task-fails-before-app-interaction)、[Computer Use Settings Says Plugin Unavailable](https://github.com/chen0416ccc-cpu/codex-windows-fast-patch-skill/blob/83d564dd9e9d429ca1a415cd9791fab9922e31c8/references/restriction-debug-cases.md#computer-use-settings-says-plugin-unavailable)，以及安装器的 `Get-ComputerUsePipeConfigState` / `Update-CodexConfig` 行为实现本地配置修复，不新增 ASAR 或 EXE 补丁。
+
+这个错误表示连接时没有找到目标原生管道，单凭错误文本无法区分旧地址、helper 缺失、桌面服务启动失败或退出。已安装插件和完整的包内文件都不足以证明管道已建立。
+
+- “检查 Computer Use”解析 `config.toml` 中 `[mcp_servers.node_repl.env]` 的 `SKY_CUA_NATIVE_PIPE` 和 `SKY_CUA_NATIVE_PIPE_DIRECTORY`。与上游一致，通过 Windows `Test-Path -LiteralPath` 检查覆盖地址是否存在，不试连或伪造管道。
+- “准备 Computer Use”在已有备份／恢复流程内，仅移除确认失效或不完整的两个覆盖项。活动地址保留；检查失败、TOML 无法解析或无法安全局部编辑时保留配置并给出原因。解析前后的完整文档对照保证其他配置不变，保留注释、换行和编码；不整份重写 TOML。
+- 启动副本时，对继承的同名环境变量做同样检查。失效值仅从本次子进程环境移除，不改用户或系统环境变量，不保存动态 pipe 地址。
+- 插件已经安装启用时，修 pipe 配置不会重复执行 `plugin add`。准备完成后必须完全重启副本并新建会话，旧进程和旧会话不会因此自动更新。
+- 运行环境详情额外显示最近的 native pipe 启动与 Browser Use 可用性日志，注明文件时间及来源。历史 `startup ready` 不代表当前 pipe 存活；未找到日志也不视为通过。显示 `missing-helper-path` 时仍需确认当前运行时／缓存实际缺失项，本实现不盲目覆盖缓存。
+
+界面“基础检查通过”只表示文件、Computer Use 插件和 pipe 覆盖配置通过检查。Chrome 注册表、主机清单、schema 2 主机文件路径和浏览器插件状态另列为诊断项，不自动重装浏览器、不修改注册表、不把历史日志视作当前连接成功。详见 [浏览器适配核对](browser-use.md)。
+
+Windows 使用步骤：更新并重新打包 nofy-helper，退出 Codex，在现有副本上点击“检查 Computer Use”；若发现失效 pipe 配置，点击“准备 Computer Use”，然后从工具启动原副本，在新会话中验证。此修复不要求重新制作应用副本；若官方安装已更新，仍需按原有完整性规则重新创建。
+
 ## 验证边界
 
 自动测试使用合成 ASAR／PE、模拟插件 CLI 和浏览器桥接；Electron 冒烟测试验证真实 Electron 文件系统与 Worker 检测。尚未在用户的实际 Windows 包上验证 CLI 注册、统一 CUA 清单生成、截图或输入。
+
+新增回归覆盖 pipe 存在／缺失／未知状态、失效配置清理与精确恢复、活动配置保留、TOML 注释和多行字符串保护、启动环境隔离、Chrome 失效主机路径及历史日志判读。Windows pipe 探测与注册表读取尚需实机验证；不能据这些模拟测试宣称用户本次错误已消失。
 
 未引入参考项目的自定义模型、其他插件、浏览器／Chrome 改动、全局环境变量、代理继承、Windows sandbox 配置或 Windows 10 原生截图二进制修改。
 

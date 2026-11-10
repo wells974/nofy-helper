@@ -5,6 +5,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { hashFile, sha256 } from './hash';
 import type { ComputerUseStatus, RuntimeCheck } from '../shared';
+import { planPipeConfig, type PipeProbe, probeNativePipe } from './native-pipe';
+import { browserTransportChecks, desktopTransportChecks } from './transport-diagnostics';
 
 const exec = promisify(execFile);
 export type CliRunner = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
@@ -26,7 +28,8 @@ const required = [
 /** Uses the selected copy's official CLI and packaged plugins; no downloaded scripts. */
 export class ComputerUseRuntime {
   constructor(readonly root: string, readonly source: string, readonly folder: string, readonly codexHome: string,
-    private readonly report: (message: string) => void = () => {}, private readonly runner: CliRunner = runCli) {}
+    private readonly report: (message: string) => void = () => {}, private readonly runner: CliRunner = runCli,
+    private readonly pipeProbe: PipeProbe = probeNativePipe) {}
   private get configPath() { return path.join(this.codexHome, 'config.toml'); }
   private get snapshots() { return path.join(this.folder, 'cua-config'); }
   private get env(): NodeJS.ProcessEnv { return { ...process.env, CODEX_HOME: this.codexHome, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1' }; }
@@ -96,6 +99,13 @@ export class ComputerUseRuntime {
         const text = await this.runner(path.join(this.root, 'resources', 'codex.exe'), this.args('plugin', 'list', '--marketplace', 'openai-bundled', '--json'), this.env);
         const plugins = JSON.parse(text.replace(/^\uFEFF/, ''));
         if (!Array.isArray(plugins.installed)) throw new Error('插件列表格式不受支持。');
+        for (const name of ['browser', 'chrome', 'unified-computer-use']) {
+          const matches = plugins.installed.filter((item: any) => item?.pluginId === `${name}@openai-bundled`);
+          const ok = matches.length === 1 && matches[0].installed === true && matches[0].enabled === true;
+          checks.push({ name: `${name} 插件诊断`, ok, ...(!ok ? { warning: true } : {}), detail: ok
+            ? '官方 CLI：已安装并启用；尚未验证运行时连接。'
+            : '官方 CLI 未确认唯一且已启用的插件；浏览器功能需单独完成插件设置，不自动重装。' });
+        }
         const descriptor = JSON.parse(await readFile(path.join(this.root, 'resources/plugins/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json'), 'utf8'));
         const installed = plugins.installed.filter((plugin: any) => plugin?.pluginId === selector);
         if (descriptor.name !== 'computer-use' || typeof descriptor.version !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(descriptor.version)) throw new Error('Computer Use 插件描述不受支持。');
@@ -129,6 +139,16 @@ export class ComputerUseRuntime {
         }
       } catch (error) { canPrepare = false; checks.push({ name: 'Computer Use 插件', ok: false, detail: error instanceof Error ? error.message : String(error) }); }
     }
+    try {
+      const pipe = await planPipeConfig((await this.readConfig()).bytes, this.pipeProbe);
+      checks.push({ name: 'Native pipe 配置', ok: pipe.state === 'absent' || pipe.state === 'active', detail: pipe.detail + (pipe.cleaned ? ' 点击“准备 Computer Use”备份并移除这两个失效覆盖项。' : '') });
+      if (pipe.state === 'unknown') canPrepare = false;
+    } catch {
+      canPrepare = false;
+      checks.push({ name: 'Native pipe 配置', ok: false, detail: '配置不可读或路径不安全，未修改。' });
+    }
+    const localAppData = process.platform === 'win32' ? process.env.LOCALAPPDATA : undefined;
+    checks.push(...await browserTransportChecks(this.codexHome, localAppData), ...await desktopTransportChecks(localAppData));
     const snapshot = await this.snapshot();
     for (const check of checks.filter(check => !check.ok)) this.report(`${check.warning ? 'Computer Use 提示' : 'Computer Use 检查未通过'}：${check.name}：${check.detail}`);
     return { ready: canPrepare && checks.every(check => check.ok || check.warning), canPrepare, checks, backup: snapshot ? path.join(this.snapshots, `${snapshot.id}.toml`) : undefined };
@@ -136,8 +156,10 @@ export class ComputerUseRuntime {
   async prepare(): Promise<ComputerUseStatus> {
     const before = await this.status();
     if (before.ready) { this.report('官方 CLI 已确认 Computer Use 插件安装并启用，无需重复安装。'); return before; }
-    if (!before.canPrepare) throw new Error('当前副本的 Computer Use 运行文件不完整或 CLI 校验失败；请查看检测结果，并从完整官方安装重新创建副本。');
+    if (!before.canPrepare) throw new Error('Computer Use 运行文件、配置检查或 CLI 校验失败；请查看运行环境详情中的具体原因。');
     const config = await this.readConfig();
+    const pipe = await planPipeConfig(config.bytes, this.pipeProbe);
+    if (pipe.state === 'unknown') throw new Error(pipe.detail);
     let snapshot = await this.snapshot();
     await this.checkLinks(this.snapshots);
     await mkdir(this.snapshots, { recursive: true });
@@ -155,17 +177,34 @@ export class ComputerUseRuntime {
     const backup = path.join(this.snapshots, `${snapshot.id}.toml`);
     const current = await this.readConfig();
     if (sha256(current.bytes) !== sha256(config.bytes) || current.existed !== config.existed) throw new Error('Codex 配置在准备过程中发生变化，已停止。');
-    this.report('已备份 Codex 配置，使用副本自带 CLI 注册 Computer Use 插件…');
+    this.report('已备份 Codex 配置，准备 Computer Use 运行环境…');
+    let trackAfter = false;
     try {
-      await this.runner(path.join(this.root, 'resources/codex.exe'), this.args('plugin', 'add', selector, '--json'), this.env);
+      if (pipe.cleaned) {
+        const temp = path.join(this.codexHome, `config-${randomUUID()}.tmp`);
+        try {
+          await writeFile(temp, pipe.cleaned, { flag: 'wx', mode: 0o600 });
+          const latest = await this.readConfig();
+          if (sha256(latest.bytes) !== sha256(config.bytes) || latest.existed !== config.existed) throw new Error('Codex 配置在准备过程中发生变化，已停止。');
+          await rename(temp, this.configPath);
+          trackAfter = true;
+        } finally { await rm(temp, { force: true }); }
+        this.report('已移除失效的 SKY_CUA_NATIVE_PIPE / SKY_CUA_NATIVE_PIPE_DIRECTORY 覆盖；下次启动由 Codex 创建连接。');
+      }
+      if (!before.checks.find(check => check.name === 'Computer Use 插件')?.ok) {
+        trackAfter = true;
+        await this.runner(path.join(this.root, 'resources/codex.exe'), this.args('plugin', 'add', selector, '--json'), this.env);
+      }
     } finally {
-      const after = await this.readConfig();
-      snapshot.afterHash = sha256(after.bytes); snapshot.afterExisted = after.existed;
-      await this.save(snapshot);
+      if (trackAfter) {
+        const after = await this.readConfig();
+        snapshot.afterHash = sha256(after.bytes); snapshot.afterExisted = after.existed;
+        await this.save(snapshot);
+      }
     }
     const after = await this.status();
     if (!after.ready) throw new Error(`Computer Use 准备后核验未通过：${after.checks.filter(check => !check.ok && !check.warning).map(check => `${check.name}：${check.detail}`).join('；')}。原配置备份：${backup}`);
-    this.report('Computer Use 运行文件与插件已就绪；启动副本后仍需在 Codex 内确认截图与操作效果。');
+    this.report('Computer Use 文件、插件与 pipe 配置基础检查通过；请完全重启副本并新建会话，确认 native pipe 启动及实际操作。浏览器连接需单独验证。');
     return after;
   }
   async restoreConfig(): Promise<void> {

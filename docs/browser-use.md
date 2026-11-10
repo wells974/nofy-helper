@@ -2,7 +2,7 @@
 
 核对日期：2026-11-10。参考项目为 [codex-windows-fast-patch-skill](https://github.com/chen0416ccc-cpu/codex-windows-fast-patch-skill)，本次查询 GitHub 默认分支最新提交仍为 `83d564dd9e9d429ca1a415cd9791fab9922e31c8`，与现有 Computer Use 研究版本一致。
 
-这是诊断与接入依据，不代表 nofy-helper 已实现浏览器修复。此次不修改应用功能判断、插件配置或注册表。
+这是诊断与接入依据，不代表 nofy-helper 已实现完整浏览器修复。现已增加只读的浏览器插件、Chrome 主机注册及路径、桌面连接日志检查；未修改浏览器功能判断或注册表。
 
 ## 已确认的差距
 
@@ -33,6 +33,10 @@ Store 包版本 `26.1103.4239.0` 与包内版本 `26.1103.32239` 不能直接按
 
 ## Windows 日志采集
 
+更新 nofy-helper 后，可优先在现有副本上点击“检查 Computer Use”并展开“运行环境详情”：这里会同时显示 native pipe 配置、Chrome／Browser 插件、当前用户 Chrome Native Messaging 注册、主机清单与路径记录，以及两类桌面日志。浏览器诊断是提示项，不阻止副本启动。它尚未执行扩展的动态连接测试，也没有检查所有注册表范围或 Edge。
+
+Any App 的 `SKY_CUA_NATIVE_PIPE_DIRECTORY` 与 Chrome Native Messaging 是不同连接入口，不能因为 Any App 报 `os error 2` 就认定浏览器也有同样的 pipe 故障。Chrome 仍可能因为主机／客户端路径失效而无法连接；内置 Browser Use 也有独立的可用性和运行服务。检查中的文件存在、插件启用或历史日志都不构成网页操作验收。
+
 先打开正在使用的修复副本，重现浏览器不可用提示，然后正常退出副本，让 Electron 刷新日志。在 PowerShell 中运行下列只读命令；它不修改配置、插件、注册表或安装文件。只输出相关事件，分享前仍应检查是否包含个人信息。
 
 ```powershell
@@ -60,6 +64,6 @@ foreach ($browserLogRoot in $browserLogRoots) {
 
 ## 接入边界
 
-目前仅完成上游比对，没有浏览器补丁或 Windows 实机验收结果。下一步依据日志选择上游已经覆盖的修复分支，再对实际资源做匹配、备份与验证。保持现有独立副本与恢复机制，不将上游重装 MSIX 的整套安装流程直接套到 nofy-helper 副本上。
+目前已完成上游比对及连接前置诊断，没有浏览器可用性补丁或 Windows 实机验收结果。下一步依据诊断结果选择上游已经覆盖的修复分支，再对实际资源做匹配、备份与验证。保持现有独立副本与恢复机制，不将上游重装 MSIX 的整套安装流程直接套到 nofy-helper 副本上。
 
 上游仓库未发现明确许可证；参考技术行为与诊断依据，不直接复制或分发其安装器。官方产品操作说明：[Chrome 扩展](https://learn.chatgpt.com/docs/chrome-extension)、[内置浏览器](https://learn.chatgpt.com/docs/browser)。

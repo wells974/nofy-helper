@@ -143,5 +143,36 @@ test('reports an actually missing or disabled plugin separately from advisory ca
   const status = await disabled.status();
   assert.equal(status.ready, false); assert.equal(status.canPrepare, true);
   assert.match(status.checks.find(check => check.name === 'Computer Use 插件')!.detail, /已安装但未启用/);
-  assert.equal(status.checks.some(check => check.warning), false);
+  assert.equal(status.checks.some(check => check.name === '插件文件诊断'), false);
+});
+
+test('cleans stale pipe config even when the plugin is already enabled, with a reversible backup and no reinstall', async t => {
+  const e = await environment(t);
+  const original = e.original + `[mcp_servers.node_repl.env]\nSKY_CUA_NATIVE_PIPE = "1"\nSKY_CUA_NATIVE_PIPE_DIRECTORY = '\\\\.\\pipe\\codex-computer-use-old'\nOTHER = "keep"\n`;
+  await writeFile(path.join(e.home, 'config.toml'), original);
+  const runtime = new ComputerUseRuntime(e.root, e.source, e.folder, e.home, undefined, async (_file, args) => {
+    assert.ok(!args.includes('add'));
+    return JSON.stringify({ installed: [{ pluginId: 'computer-use@openai-bundled', installed: true, enabled: true, version: '1.0' }] });
+  }, async () => 'missing');
+  const before = await runtime.status();
+  assert.equal(before.ready, false); assert.equal(before.canPrepare, true);
+  const after = await runtime.prepare();
+  assert.equal(after.ready, true);
+  assert.equal(await readFile(after.backup!, 'utf8'), original);
+  const cleaned = await readFile(path.join(e.home, 'config.toml'), 'utf8');
+  assert.ok(!cleaned.includes('SKY_CUA_NATIVE_PIPE')); assert.ok(cleaned.includes('OTHER = "keep"'));
+  assert.equal((await runtime.prepare()).backup, after.backup);
+  await runtime.restoreConfig();
+  assert.equal(await readFile(path.join(e.home, 'config.toml'), 'utf8'), original);
+});
+
+test('an unreadable pipe check blocks cleanup without backing up or overwriting config', async t => {
+  const e = await environment(t);
+  const original = `[mcp_servers.node_repl.env]\nSKY_CUA_NATIVE_PIPE = "1"\nSKY_CUA_NATIVE_PIPE_DIRECTORY = '\\\\.\\pipe\\codex-computer-use-current'\n`;
+  await writeFile(path.join(e.home, 'config.toml'), original);
+  const runtime = new ComputerUseRuntime(e.root, e.source, e.folder, e.home, undefined, e.runner, async () => 'unknown');
+  assert.equal((await runtime.status()).canPrepare, false);
+  await assert.rejects(() => runtime.prepare(), /配置检查/);
+  assert.equal(await readFile(path.join(e.home, 'config.toml'), 'utf8'), original);
+  assert.equal((await runtime.status()).backup, undefined);
 });

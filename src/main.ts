@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { RepairBackend } from './backend';
 import { discover, assertWindows } from './windows';
+import { cleanPipeEnvironment } from './core/native-pipe';
 import type { Inspection, Progress, Result, RepairOptions } from './shared';
 
 let window: BrowserWindow;
@@ -84,9 +85,16 @@ async function setup() {
         if (!status.ready) report('Computer Use 尚未就绪，仍可启动副本；请在 Codex 内检查插件与 Any App 设置。');
       } catch (error) { report(`无法确认 Computer Use 状态，仍可启动副本：${error instanceof Error ? error.message : String(error)}`); }
     }
+    let launchEnv = { ...process.env };
+    if (computerUse) {
+      const cleaned = await cleanPipeEnvironment(launchEnv);
+      launchEnv = { ...cleaned.env, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1', NODE_REPL_TRUSTED_CODE_PATHS: [process.env.NODE_REPL_TRUSTED_CODE_PATHS, path.join(path.dirname(executable), 'resources/cua_node/bin/node_modules'), path.join(path.dirname(executable), 'resources/plugins/openai-bundled')].filter(Boolean).join(path.delimiter) };
+      if (cleaned.check.state === 'stale') report('本次启动已排除继承的失效 native pipe 变量；系统环境变量未修改。');
+      else if (cleaned.check.state === 'unknown') report(cleaned.check.detail);
+    }
     await new Promise<void>((resolve, reject) => {
       const child = spawn(executable, [], { detached: true, stdio: 'ignore', cwd: path.dirname(executable), shell: false,
-        env: computerUse ? { ...process.env, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1', NODE_REPL_TRUSTED_CODE_PATHS: [process.env.NODE_REPL_TRUSTED_CODE_PATHS, path.join(path.dirname(executable), 'resources/cua_node/bin/node_modules'), path.join(path.dirname(executable), 'resources/plugins/openai-bundled')].filter(Boolean).join(path.delimiter) } : process.env });
+        env: launchEnv });
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve(); });
     });
