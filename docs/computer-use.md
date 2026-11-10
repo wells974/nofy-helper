@@ -21,7 +21,9 @@
 
 工具检查副本 `resources/codex.exe`、`cua_node/bin/` 下的 Node／Node REPL／CUA REPL／Sky Windows 服务及 bundled 插件描述，与原始安装逐项对照。插件就绪依据为官方 CLI 返回的唯一 `computer-use@openai-bundled` 记录，要求 `installed: true` 且 `enabled: true`。插件文件诊断使用 CLI 返回的版本，检查默认缓存目录及 CLI 提供的本地 marketplace 源路径，比较描述文件的名称和版本，不要求 JSON 字节完全一致。缓存位置无法确认或插件版本与包内版本不同，仅作为兼容性提示，不推翻官方安装状态，也不触发重复安装。
 
-使用 `shell: false` 启动官方 CLI，以进程内 `-c` 参数指定副本的本地 bundled marketplace，执行 `plugin list` 和必要的 `plugin add computer-use@openai-bundled`。
+使用 `shell: false` 启动副本自带且与原包一致的官方 CLI，传入实际 `CODEX_HOME`，沿用现有 marketplace 配置执行 `plugin list --marketplace openai-bundled --json` 和必要的 `plugin add`。不再用 `-c` 把 `openai-bundled` 来源替换为副本目录：上游安装器 `Get-ConfiguredBundledMarketplaceRoot` 明确记录，新版 CLI 只加载 Desktop 在 `.tmp/bundled-marketplaces/openai-bundled` 生成的保留来源，其他来源可能被静默忽略，造成“手动能看到插件、helper 却显示未安装”。
+
+用户提供的 helper 日志在 2026-11-10 08:58:54（北京时间）记录了“清理失效 pipe 成功”后“CLI 插件命令失败”，不是完整准备成功。现在失败会显示退出码及经过常见凭据脱敏的 stderr，日志同时记录实际 `CODEX_HOME`，避免把来源不一致误报成插件未安装。此证据定位到准备流程缺陷，尚不能独立证明原生服务最终已成功启动。
 
 准备前备份当前 `config.toml`，记录准备后的内容摘要和文件是否存在。重复尝试沿用首次备份；恢复前验证备份，并确认当前配置仍是本工具准备后的版本，避免覆盖用户之后的修改。插件缓存保留，应用文件恢复与配置恢复使用独立入口。Computer Use 未就绪不再禁用副本启动，允许进入 Codex 完成插件／Any App 设置；ASAR／EXE 指纹、官方应用更新和进程冲突仍会阻止不符合条件的启动。
 
@@ -39,7 +41,7 @@
 - 插件已经安装启用时，修 pipe 配置不会重复执行 `plugin add`。准备完成后必须完全重启副本并新建会话，旧进程和旧会话不会因此自动更新。
 - 运行环境详情额外显示最近的 native pipe 启动与 Browser Use 可用性日志，注明文件时间及来源。历史 `startup ready` 不代表当前 pipe 存活；未找到日志也不视为通过。显示 `missing-helper-path` 时仍需确认当前运行时／缓存实际缺失项，本实现不盲目覆盖缓存。
 
-界面“基础检查通过”只表示文件、Computer Use 插件和 pipe 覆盖配置通过检查。Chrome 注册表、主机清单、schema 2 主机文件路径和浏览器插件状态另列为诊断项，不自动重装浏览器、不修改注册表、不把历史日志视作当前连接成功。详见 [浏览器适配核对](browser-use.md)。
+界面“基础检查通过”只表示文件、所选组合的插件和 pipe 覆盖配置通过检查。选择“中文 + 电脑与浏览器”时还要求 browser、chrome 插件已安装且启用，准备时只调用 CLI 补齐缺失或未启用项；其他组合仍将其作为提示。Chrome 注册表、主机清单、schema 2 主机文件路径另列为诊断项，不修改注册表、不把历史日志视作当前连接成功。详见 [浏览器适配核对](browser-use.md)。
 
 Windows 使用步骤：更新并重新打包 nofy-helper，退出 Codex，在现有副本上点击“检查 Computer Use”；若发现失效 pipe 配置，点击“准备 Computer Use”，然后从工具启动原副本，在新会话中验证。此修复不要求重新制作应用副本；若官方安装已更新，仍需按原有完整性规则重新创建。
 
@@ -49,7 +51,7 @@ Windows 使用步骤：更新并重新打包 nofy-helper，退出 Codex，在现
 
 新增回归覆盖 pipe 存在／缺失／未知状态、失效配置清理与精确恢复、活动配置保留、TOML 注释和多行字符串保护、启动环境隔离、Chrome 失效主机路径及历史日志判读。Windows pipe 探测与注册表读取尚需实机验证；不能据这些模拟测试宣称用户本次错误已消失。
 
-未引入参考项目的自定义模型、其他插件、浏览器／Chrome 改动、全局环境变量、代理继承、Windows sandbox 配置或 Windows 10 原生截图二进制修改。
+浏览器可用性适配通过独立组合选项启用。未引入参考项目的自定义模型、无关插件、全局环境变量、代理继承、Windows sandbox 配置或 Windows 10 原生截图二进制修改。
 
 Chrome 与内置 Browser Use 的上游目标、当前缺口和日志诊断步骤见 [浏览器适配核对](browser-use.md)。Any App 已启用不能作为浏览器功能已修复的依据。
 

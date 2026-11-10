@@ -80,9 +80,10 @@ export function transportLogSummary(text: string): { native?: string; browser?: 
 }
 
 /** Read bounded recent log tails; no log content or configuration is modified. */
-export async function desktopTransportChecks(localAppData: string | undefined): Promise<RuntimeCheck[]> {
+export async function desktopTransportChecks(localAppData: string | undefined, appData?: string): Promise<RuntimeCheck[]> {
   if (!localAppData) return [diagnostic('桌面连接日志', false, '当前平台无法读取 Windows 桌面日志。')];
-  const roots = [path.join(localAppData, 'Codex/Logs'), path.join(localAppData, 'Packages/OpenAI.Codex_2p2nqsd0c76g0/LocalCache/Local/Codex/Logs')];
+  const roots = [path.join(localAppData, 'Codex/Logs'), path.join(localAppData, 'Packages/OpenAI.Codex_2p2nqsd0c76g0/LocalCache/Local/Codex/Logs'),
+    ...(appData ? [path.join(appData, 'Codex/logs'), path.join(appData, 'ChatGPT/logs')] : [])];
   const files: { file: string; modified: number }[] = [];
   let budget = 3000;
   async function collect(dir: string, depth: number): Promise<void> {
@@ -117,5 +118,5 @@ export async function desktopTransportChecks(localAppData: string | undefined): 
     } catch { /* logs may rotate during inspection */ }
   }
   return ['native', 'browser'].map(kind => found[kind] ?? diagnostic(kind === 'native' ? 'Native pipe 最近日志' : 'Browser Use 最近日志', false,
-    '最近日志中未找到对应事件；不是通过结论。重现后正常退出 Codex，再检查；也可能需要确认实际日志目录。'));
+    `最近日志中未找到对应事件；不是通过结论。发现 ${files.length} 个非空日志，读取最新 ${Math.min(files.length, 12)} 个的尾部。检查目录：${roots.join('；')}。重现后正常退出 Codex，再检查。`));
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, realpath, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { ComputerUseRuntime, type CliRunner } from '../src/core/computer-use-runtime';
+import { ComputerUseRuntime, pluginCommandError, type CliRunner } from '../src/core/computer-use-runtime';
 
 async function environment(t: any) {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'nofy-cua-runtime-')));
@@ -22,7 +22,7 @@ async function environment(t: any) {
   const runner: CliRunner = async (file, args, env) => {
     assert.equal(file, path.join(root, 'resources/codex.exe'));
     assert.equal(env.CODEX_HOME, home);
-    assert.ok(args.includes('marketplaces.openai-bundled.source_type="local"'));
+    assert.ok(!args.includes('-c'), 'use the configured reserved marketplace, never replace its source');
     if (args.includes('add')) {
       assert.ok(args.includes('computer-use@openai-bundled'));
       assert.ok(!args.some(arg => arg.includes('chrome@') || arg.includes('browser@')));
@@ -175,4 +175,42 @@ test('an unreadable pipe check blocks cleanup without backing up or overwriting 
   await assert.rejects(() => runtime.prepare(), /配置检查/);
   assert.equal(await readFile(path.join(e.home, 'config.toml'), 'utf8'), original);
   assert.equal((await runtime.status()).backup, undefined);
+});
+
+test('uses the real configured marketplace rather than an override that silently hides installed plugins', async t => {
+  const e = await environment(t);
+  const observed: string[][] = [];
+  const runtime = new ComputerUseRuntime(e.root, e.source, e.folder, e.home, undefined, async (_file, args) => {
+    observed.push(args);
+    if (args.includes('-c')) return '{"installed":[],"available":[]}';
+    assert.ok(!args.includes('add'), 'a registered plugin must not be reinstalled');
+    return JSON.stringify({ installed: ['computer-use', 'browser', 'chrome', 'unified-computer-use'].map(name => ({ pluginId: `${name}@openai-bundled`, installed: true, enabled: true, version: '26.1103.32239' })) });
+  });
+  const status = await runtime.prepare();
+  assert.equal(status.ready, true);
+  assert.deepEqual(observed, [['plugin', 'list', '--marketplace', 'openai-bundled', '--json']]);
+  assert.equal(await readFile(path.join(e.home, 'config.toml'), 'utf8'), e.original);
+});
+
+test('browser combination installs only missing browser plugins using the existing marketplace', async t => {
+  const e = await environment(t), installed = new Set(['computer-use', 'chrome']);
+  for (const name of ['browser', 'chrome']) for (const root of [e.root, e.source]) {
+    const file = path.join(root, `resources/plugins/openai-bundled/plugins/${name}/.codex-plugin/plugin.json`);
+    await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify({ name, version: '1.0' }));
+  }
+  const added: string[] = [];
+  const runtime = new ComputerUseRuntime(e.root, e.source, e.folder, e.home, undefined, async (_file, args) => {
+    assert.ok(!args.includes('-c'));
+    if (args.includes('add')) { const name = args[2].split('@')[0]; added.push(name); installed.add(name); return '{}'; }
+    return JSON.stringify({ installed: [...installed].map(name => ({ pluginId: `${name}@openai-bundled`, installed: true, enabled: true, version: '1.0' })) });
+  }, undefined, true);
+  assert.equal((await runtime.status()).ready, false);
+  assert.equal((await runtime.prepare()).ready, true);
+  assert.deepEqual(added, ['browser']);
+});
+
+test('CLI failures include the exit code and useful stderr while masking common credentials', () => {
+  const error = pluginCommandError({ code: 2, stderr: 'plugin not found in marketplace openai-bundled\napi_key="private-key"\nAuthorization: Bearer private-token\nhttps://user:password@example.com\nsk-test-secret' });
+  assert.match(error.message, /退出码 2/); assert.match(error.message, /plugin not found in marketplace/);
+  for (const secret of ['private-key', 'private-token', 'user:password', 'sk-test-secret']) assert.ok(!error.message.includes(secret));
 });

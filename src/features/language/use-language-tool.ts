@@ -12,6 +12,7 @@ export function useLanguageTool() {
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [records, setRecords] = useState<Installation[]>([]);
   const [computerUse, setComputerUse] = useState(false);
+  const [browserUse, setBrowserUse] = useState(false);
   const [computerUseStates, setComputerUseStates] = useState<Record<string, ComputerUseStatus>>({});
   const [events, setEvents] = useState<Progress[]>([]);
   const [busy, setBusy] = useState('');
@@ -38,19 +39,19 @@ export function useLanguageTool() {
     void run('正在查找安装', load).finally(() => setLoaded(true));
     return unsubscribe;
   }, [api, load, run]);
-  const setInput = (value: string) => { setPath(value); setInspection(null); setComputerUse(false); setNotice(null); };
+  const setInput = (value: string) => { setPath(value); setInspection(null); setComputerUse(false); setBrowserUse(false); setNotice(null); };
   const notify = (text: string) => setNotice({ text, error: false });
   return {
     overview, path, inspection, records, events, busy, loaded, notice, supported, connected: !!api,
-    computerUse, computerUseStates, setComputerUse,
+    computerUse, browserUse, computerUseStates, setComputerUse, setBrowserUse,
     setInput, dismiss: () => setNotice(null),
-    rescan: () => run('正在查找安装', async () => { setInspection(null); setComputerUse(false); await load(); }),
+    rescan: () => run('正在查找安装', async () => { setInspection(null); setComputerUse(false); setBrowserUse(false); await load(); }),
     browse: () => run('正在选择目录', async () => { const chosen = unwrap(await api.choose()); if (chosen) setInput(chosen); }),
-    inspect: () => run('正在检测安装', async () => { setInspection(null); setComputerUse(false); setInspection(unwrap(await api.inspect(path))); }),
+    inspect: () => run('正在检测安装', async () => { setInspection(null); setComputerUse(false); setBrowserUse(false); setInspection(unwrap(await api.inspect(path))); }),
     repair: () => run('正在创建修复副本', async () => {
-      const record = unwrap(await api.repair({ computerUse })); if (!record) return;
+      const record = unwrap(await api.repair({ computerUse, browserUse })); if (!record) return;
       setRecords(current => [record, ...current]);
-      notify(computerUse ? '中文与 Computer Use 副本已创建。请先准备 Computer Use，再启动验证效果。' : '修复副本已创建。启动后，请在 Codex 中确认中文显示。');
+      notify(browserUse ? '中文、电脑与浏览器副本已创建。请准备运行环境，启动后完成浏览器扩展设置并验证效果。' : computerUse ? '中文与 Computer Use 副本已创建。请先准备 Computer Use，再启动验证效果。' : '修复副本已创建。启动后，请在 Codex 中确认中文显示。');
     }),
     checkComputerUse: (id: string) => run('正在检查 Computer Use', async () => {
       const status = unwrap(await api.computerUseStatus(id));
@@ -61,7 +62,7 @@ export function useLanguageTool() {
       const refreshed = result.ok ? result : await api.computerUseStatus(id);
       if (refreshed.ok) setComputerUseStates(current => ({ ...current, [id]: refreshed.value }));
       unwrap(result);
-      notify('Computer Use 运行文件与插件已就绪。启动副本后，请验证 Any App、截图和窗口操作。');
+      notify('运行环境基础检查通过。启动副本后，请分别验证 Any App 和所选浏览器功能。');
     }),
     restoreComputerUseConfig: (id: string) => run('正在恢复 Computer Use 配置', async () => {
       unwrap(await api.restoreComputerUseConfig(id));

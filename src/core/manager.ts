@@ -5,6 +5,7 @@ import { planArchive, readArchive, writeArchivePatch } from './asar';
 import { hashFile, sha256 } from './hash';
 import { integrityResource, patchExecutable } from './pe';
 import { addComputerUsePatches, planComputerUse } from './computer-use-gates';
+import { addBrowserUsePatches, planBrowserUse } from './browser-use-gates';
 import { ComputerUseRuntime } from './computer-use-runtime';
 import os from 'node:os';
 import type { Inspection, Installation, RepairOptions, ComputerUseSupport } from '../shared';
@@ -33,6 +34,10 @@ export async function inspect(input: string, report: Report = silent): Promise<I
   try { computerUse = (await planComputerUse(plan)).support; }
   catch (error) { computerUse = { supported: false, reason: error instanceof Error ? error.message : String(error), files: [], patches: 0 }; }
   report(computerUse.reason);
+  let browserUse: ComputerUseSupport;
+  try { browserUse = (await planBrowserUse(plan)).support; }
+  catch (error) { browserUse = { supported: false, reason: error instanceof Error ? error.message : String(error), files: [], patches: 0 }; }
+  report(browserUse.reason);
   const headerHash = sha256(plan.archive.raw);
   // Store packages may ship both a launcher and the Electron host. Match their
   // embedded ASAR hash rather than requiring a single recognized filename.
@@ -55,7 +60,7 @@ export async function inspect(input: string, report: Report = silent): Promise<I
   const { executable, executableHash } = matches[0];
   report(`选定应用程序：${executable}。`);
   report('核对原始文件指纹…');
-  return { root, executable, headerHash, sourceHash: await hashFile(asar(root)), executableHash, version: plan.version, packageName: plan.packageName, translationFiles: plan.translationFiles, gateFile: plan.file, gateOffset: plan.patch.start, store: /(?:^|[\\/])WindowsApps(?:[\\/]|$)/i.test(root), computerUse };
+  return { root, executable, headerHash, sourceHash: await hashFile(asar(root)), executableHash, version: plan.version, packageName: plan.packageName, translationFiles: plan.translationFiles, gateFile: plan.file, gateOffset: plan.patch.start, store: /(?:^|[\\/])WindowsApps(?:[\\/]|$)/i.test(root), computerUse, browserUse };
 }
 
 export class RepairManager {
@@ -75,6 +80,7 @@ export class RepairManager {
     await this.noLinks(folder, ['', 'manifest.json']);
     const value = JSON.parse(await readFile(path.join(folder, 'manifest.json'), 'utf8')) as Installation;
     if (value.features !== undefined && (typeof value.features !== 'object' || value.features === null || typeof value.features.computerUse !== 'boolean')) throw new Error('修复功能记录损坏。');
+    if (value.features?.browserUse !== undefined && (typeof value.features.browserUse !== 'boolean' || value.features.browserUse && !value.features.computerUse)) throw new Error('浏览器修复功能记录损坏。');
     if (value.id !== id || !['ready', 'restoring', 'restored'].includes(value.status) || !/^(?:codex|chatgpt)\.exe$/i.test(value.source?.executable) || typeof value.source?.root !== 'string' || !path.isAbsolute(value.source.root) || typeof value.source.version !== 'string' || typeof value.createdAt !== 'string' || ![value.source.sourceHash, value.source.executableHash, value.source.headerHash, value.patchedAsarHash, value.patchedExeHash, value.patchedHeaderHash].every(hash => typeof hash === 'string' && /^[a-f\d]{64}$/.test(hash))) throw new Error('修复记录损坏。');
     return value;
   }
@@ -98,9 +104,11 @@ export class RepairManager {
   async install(expected: Inspection, options: RepairOptions = {}): Promise<Installation> {
     return this.exclusive(async () => {
       await this.assertStopped();
+      if (options.browserUse && !options.computerUse) throw new Error('浏览器组合修复需要同时启用 Computer Use。');
       await mkdir(this.storage, { recursive: true });
       const source = await inspect(expected.root, this.report);
       if (options.computerUse && !source.computerUse?.supported) throw new Error(source.computerUse?.reason || '当前版本不支持 Computer Use 修复。');
+      if (options.browserUse && !source.browserUse?.supported) throw new Error(source.browserUse?.reason || '当前版本不支持浏览器修复。');
       if (source.sourceHash !== expected.sourceHash || source.executableHash !== expected.executableHash || source.root !== expected.root) throw new Error('安装文件在检测后发生变化，请重新检测。');
       const storageReal = await realpath(this.storage);
       const relative = path.relative(source.root, storageReal);
@@ -126,11 +134,12 @@ export class RepairManager {
         if (await hashFile(asar(app)) !== source.sourceHash || await hashFile(path.join(app, source.executable)) !== source.executableHash) throw new Error('复制过程中源文件发生变化，请重新检测。');
         let plan = await planArchive(asar(app));
         if (options.computerUse) plan = await addComputerUsePatches(plan);
-        this.report(options.computerUse ? '在副本中启用中文与 Computer Use 开关，并更新完整性校验…' : '在副本中启用翻译加载器，并更新完整性校验…');
+        if (options.browserUse) plan = await addBrowserUsePatches(plan);
+        this.report(options.browserUse ? '在副本中应用中文、Computer Use、Chrome 和内置 Browser Use 适配，并更新完整性校验…' : options.computerUse ? '在副本中启用中文与 Computer Use 开关，并更新完整性校验…' : '在副本中启用翻译加载器，并更新完整性校验…');
         const patchedHeaderHash = await writeArchivePatch(asar(app), plan);
         const patchedExe = patchExecutable(await readFile(path.join(app, source.executable)), source.headerHash, patchedHeaderHash);
         await writeFile(path.join(app, source.executable), patchedExe);
-        const installation: Installation = { id, createdAt: new Date().toISOString(), source, status: 'ready', patchedAsarHash: await hashFile(asar(app)), patchedExeHash: sha256(patchedExe), patchedHeaderHash, features: { computerUse: options.computerUse === true } };
+        const installation: Installation = { id, createdAt: new Date().toISOString(), source, status: 'ready', patchedAsarHash: await hashFile(asar(app)), patchedExeHash: sha256(patchedExe), patchedHeaderHash, features: { computerUse: options.computerUse === true, browserUse: options.browserUse === true } };
         await this.assertStopped();
         // Detect updater races before publishing the copy.
         if (await hashFile(asar(source.root)) !== source.sourceHash || await hashFile(path.join(source.root, source.executable)) !== source.executableHash) throw new Error('官方应用正在更新，请更新完成后重试。');
@@ -159,7 +168,7 @@ export class RepairManager {
     await this.noLinks(this.folder(id), ['app', 'app/resources', 'app/resources/app.asar', `app/${record.source.executable}`]);
     if (!configOnly && (await hashFile(asar(record.source.root)) !== record.source.sourceHash || await hashFile(path.join(record.source.root, record.source.executable)) !== record.source.executableHash)) throw new Error('官方应用已更新，请重新检测并创建修复副本。');
     if (!configOnly && (await hashFile(asar(app)) !== record.patchedAsarHash || await hashFile(path.join(app, record.source.executable)) !== record.patchedExeHash)) throw new Error('修复副本已变化，请重新创建。');
-    return new ComputerUseRuntime(app, record.source.root, this.folder(id), process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), this.report);
+    return new ComputerUseRuntime(app, record.source.root, this.folder(id), process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), this.report, undefined, undefined, record.features?.browserUse === true);
   }
   computerUseStatus(id: string) { return this.exclusive(async () => (await this.computerUseRuntime(id)).status()); }
   prepareComputerUse(id: string) { return this.exclusive(async () => { await this.assertStopped(); return (await this.computerUseRuntime(id)).prepare(); }); }
@@ -167,7 +176,7 @@ export class RepairManager {
   async launchSpec(id: string) {
     const executable = await this.launchPath(id);
     const record = await this.manifest(id);
-    return { executable, computerUse: record.features?.computerUse === true };
+    return { executable, computerUse: record.features?.computerUse === true, browserUse: record.features?.browserUse === true };
   }
   async launchPath(id: string): Promise<string> {
     return this.exclusive(async () => {

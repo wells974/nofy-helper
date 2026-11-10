@@ -52,12 +52,13 @@ async function setup() {
   handle('repair', async (input: unknown = {}) => {
     assertWindows();
     if (!latest) throw new Error('请先检测安装目录。');
-    if (!input || typeof input !== 'object' || Object.keys(input).some(key => key !== 'computerUse') || ('computerUse' in input && typeof input.computerUse !== 'boolean')) throw new Error('无效的修复选项。');
+    if (!input || typeof input !== 'object' || Object.entries(input).some(([key, value]) => !['computerUse', 'browserUse'].includes(key) || typeof value !== 'boolean')) throw new Error('无效的修复选项。');
     const options = input as RepairOptions;
     if (options.computerUse && !latest.computerUse?.supported) throw new Error(latest.computerUse?.reason || '当前版本暂不支持 Computer Use 修复。');
+    if (options.browserUse && (!options.computerUse || !latest.browserUse?.supported)) throw new Error(latest.browserUse?.reason || '浏览器组合修复需要匹配的 Computer Use 与浏览器结构。');
     const result = await dialog.showMessageBox(window, {
-      type: 'question', title: '创建修复副本', message: options.computerUse ? '在独立副本中启用中文和 Computer Use？' : '在独立副本中启用 Codex 中文界面？',
-      detail: `目标：${latest.root}\n\n将复制应用、备份原文件并${options.computerUse ? "修改副本的中文、Computer Use 开关和运行时可信目录继承逻辑" : "修改副本的语言开关"}及 EXE 完整性信息。修改后的 EXE 不再具有有效的 OpenAI 原始签名，Windows 可能阻止其运行。官方安装不会改动。${options.computerUse ? "创建后还需单独准备 Computer Use：该操作会备份 Codex 配置，再调用官方 CLI 安装并启用插件，可通过“恢复 Computer Use 配置”回退。" : "API 密钥和个人配置不会改动。"}\n\n请先退出 Codex，修复后从本工具启动副本。`,
+      type: 'question', title: '创建修复副本', message: options.browserUse ? '在独立副本中启用中文、电脑操控和浏览器？' : options.computerUse ? '在独立副本中启用中文和 Computer Use？' : '在独立副本中启用 Codex 中文界面？',
+      detail: `目标：${latest.root}\n\n将复制应用、备份原文件并${options.computerUse ? (options.browserUse ? "修改副本的中文、Computer Use、Chrome 和内置浏览器可用性及运行时可信目录继承逻辑" : "修改副本的中文、Computer Use 开关和运行时可信目录继承逻辑") : "修改副本的语言开关"}及 EXE 完整性信息。修改后的 EXE 不再具有有效的 OpenAI 原始签名，Windows 可能阻止其运行。官方安装不会改动。${options.computerUse ? "创建后还需单独准备 Computer Use：该操作会备份 Codex 配置，再通过现有内置市场调用官方 CLI 安装并启用所选组合的插件，可通过“恢复 Computer Use 配置”回退。" : "API 密钥和个人配置不会改动。"}\n\n请先退出 Codex，修复后从本工具启动副本。`,
       buttons: ['取消', '创建修复副本'], defaultId: 0, cancelId: 0, noLink: true
     });
     return result.response === 1 ? await manager.install(latest, options) : null;
@@ -78,7 +79,8 @@ async function setup() {
   handle('launch', async (id: string) => {
     assertWindows();
     if (typeof id !== 'string') throw new Error('无效记录。');
-    const { executable, computerUse } = await manager.launchSpec(id);
+    const { executable, computerUse, browserUse } = await manager.launchSpec(id);
+    report(`启动副本 ${id}：${executable}；功能：${browserUse ? '中文 + 电脑与浏览器' : computerUse ? '中文 + Computer Use' : '中文界面'}。`);
     if (computerUse) {
       try {
         const status = await manager.computerUseStatus(id);

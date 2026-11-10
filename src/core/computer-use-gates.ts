@@ -7,13 +7,13 @@ import type { ComputerUseSupport } from '../shared';
 // chen0416ccc-cpu/codex-windows-fast-patch-skill, commit 83d564dd9e9d429ca1a415cd9791fab9922e31c8.
 // No upstream installer, model changes, or global Statsig override is included.
 const fields = ['areRequirementsPending', 'areRequiredFeaturesEnabled', 'enabled', 'isBrowserAndComputerUseAllowed', 'isAnyFeatureLoading', 'isComputerUseGateEnabled', 'isHostCompatiblePlatform', 'isPlatformLoading', 'windowType'];
-interface Span { start: number; end: number; value: string; hook?: string }
-function propertyName(property: any): string | undefined {
+export interface Span { start: number; end: number; value: string; hook?: string }
+export function propertyName(property: any): string | undefined {
   if (property.type !== 'Property' || property.kind !== 'init' || property.method) return;
   if (!property.computed && property.key.type === 'Identifier') return property.key.name;
   if (property.key.type === 'Literal' && typeof property.key.value === 'string') return property.key.value;
 }
-function hookName(callee: any): string | undefined {
+export function hookName(callee: any): string | undefined {
   if (callee.type === 'SequenceExpression') {
     if (callee.expressions.length !== 2 || callee.expressions[0].type !== 'Literal' || callee.expressions[0].value !== 0) return;
     return hookName(callee.expressions[1]);
@@ -86,7 +86,7 @@ export function inheritTrustedPaths(source: string): Buffer {
   return Buffer.from(modified);
 }
 
-function apply(source: Buffer, spans: Span[]): Buffer {
+export function apply(source: Buffer, spans: Span[]): Buffer {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(source);
   const parts: Buffer[] = [];
   let byteEnd = 0;

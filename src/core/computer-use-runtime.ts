@@ -10,9 +10,21 @@ import { browserTransportChecks, desktopTransportChecks } from './transport-diag
 
 const exec = promisify(execFile);
 export type CliRunner = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
+export function pluginCommandError(error: unknown): Error {
+  const failure = error as { code?: unknown; signal?: unknown; stderr?: unknown };
+  const stderr = typeof failure?.stderr === 'string' ? failure.stderr : '';
+  const detail = stderr
+    .replace(/(Bearer\s+)\S+/gi, '$1[redacted]')
+    .replace(/\bsk-[A-Za-z0-9_-]+/g, '[redacted]')
+    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|authorization)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi, '$1[redacted]')
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[redacted]@')
+    .trim().slice(0, 2000);
+  const code = typeof failure?.code === 'number' || typeof failure?.code === 'string' ? String(failure.code) : '未知';
+  return new Error(`Codex CLI 插件命令执行失败（退出码 ${code}）${detail ? `：${detail}` : '：CLI 未返回错误详情。'}`);
+}
 const runCli: CliRunner = async (file, args, env) => {
   try { return (await exec(file, args, { env, windowsHide: true, timeout: 45000, maxBuffer: 4 * 1024 * 1024 })).stdout; }
-  catch { throw new Error('Codex CLI 插件命令执行失败，请确认 Codex 已退出且运行时完整。'); }
+  catch (error) { throw pluginCommandError(error); }
 };
 interface Snapshot { id: string; existed: boolean; beforeHash: string; afterHash?: string; afterExisted?: boolean; configPath: string }
 const selector = 'computer-use@openai-bundled';
@@ -29,13 +41,15 @@ const required = [
 export class ComputerUseRuntime {
   constructor(readonly root: string, readonly source: string, readonly folder: string, readonly codexHome: string,
     private readonly report: (message: string) => void = () => {}, private readonly runner: CliRunner = runCli,
-    private readonly pipeProbe: PipeProbe = probeNativePipe) {}
+    private readonly pipeProbe: PipeProbe = probeNativePipe, private readonly browserUse = false) {}
   private get configPath() { return path.join(this.codexHome, 'config.toml'); }
   private get snapshots() { return path.join(this.folder, 'cua-config'); }
   private get env(): NodeJS.ProcessEnv { return { ...process.env, CODEX_HOME: this.codexHome, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1' }; }
   private args(...args: string[]) {
-    const marketplace = path.join(this.root, 'resources', 'plugins', 'openai-bundled');
-    return ['-c', `marketplaces.openai-bundled.source=${JSON.stringify(marketplace)}`, '-c', 'marketplaces.openai-bundled.source_type="local"', ...args];
+    // Newer CLIs only accept openai-bundled at the Desktop-materialized reserved
+    // root. Overriding it with this copy's resources silently hides installed plugins.
+    // Use the same configured marketplace as an ordinary `codex plugin list`.
+    return args;
   }
   private async readConfig(): Promise<{ existed: boolean; bytes: Buffer }> {
     await this.checkLinks(this.codexHome);
@@ -73,7 +87,8 @@ export class ComputerUseRuntime {
   }
   async status(): Promise<ComputerUseStatus> {
     const checks: RuntimeCheck[] = [];
-    for (const relative of required) {
+    const requiredFiles = [...required, ...(this.browserUse ? ['browser', 'chrome'].map(name => `plugins/openai-bundled/plugins/${name}/.codex-plugin/plugin.json`) : [])];
+    for (const relative of requiredFiles) {
       const file = path.join(this.root, 'resources', relative);
       let ok = false;
       try {
@@ -96,15 +111,17 @@ export class ComputerUseRuntime {
     if (canPrepare) {
       try {
         await this.checkLinks(this.codexHome);
+        this.report(`检查插件使用 CODEX_HOME：${this.codexHome}；沿用现有 marketplace 配置。`);
         const text = await this.runner(path.join(this.root, 'resources', 'codex.exe'), this.args('plugin', 'list', '--marketplace', 'openai-bundled', '--json'), this.env);
         const plugins = JSON.parse(text.replace(/^\uFEFF/, ''));
         if (!Array.isArray(plugins.installed)) throw new Error('插件列表格式不受支持。');
         for (const name of ['browser', 'chrome', 'unified-computer-use']) {
           const matches = plugins.installed.filter((item: any) => item?.pluginId === `${name}@openai-bundled`);
           const ok = matches.length === 1 && matches[0].installed === true && matches[0].enabled === true;
-          checks.push({ name: `${name} 插件诊断`, ok, ...(!ok ? { warning: true } : {}), detail: ok
+          const requiredPlugin = this.browserUse && name !== 'unified-computer-use';
+          checks.push({ name: `${name} 插件诊断`, ok, ...(!ok && !requiredPlugin ? { warning: true } : {}), detail: ok
             ? '官方 CLI：已安装并启用；尚未验证运行时连接。'
-            : '官方 CLI 未确认唯一且已启用的插件；浏览器功能需单独完成插件设置，不自动重装。' });
+            : requiredPlugin ? '官方 CLI 未确认唯一且已启用的插件；点击准备以安装当前组合所需插件。' : '官方 CLI 未确认唯一且已启用的插件；浏览器功能需单独完成插件设置，不自动重装。' });
         }
         const descriptor = JSON.parse(await readFile(path.join(this.root, 'resources/plugins/openai-bundled/plugins/computer-use/.codex-plugin/plugin.json'), 'utf8'));
         const installed = plugins.installed.filter((plugin: any) => plugin?.pluginId === selector);
@@ -148,7 +165,7 @@ export class ComputerUseRuntime {
       checks.push({ name: 'Native pipe 配置', ok: false, detail: '配置不可读或路径不安全，未修改。' });
     }
     const localAppData = process.platform === 'win32' ? process.env.LOCALAPPDATA : undefined;
-    checks.push(...await browserTransportChecks(this.codexHome, localAppData), ...await desktopTransportChecks(localAppData));
+    checks.push(...await browserTransportChecks(this.codexHome, localAppData), ...await desktopTransportChecks(localAppData, process.platform === 'win32' ? process.env.APPDATA : undefined));
     const snapshot = await this.snapshot();
     for (const check of checks.filter(check => !check.ok)) this.report(`${check.warning ? 'Computer Use 提示' : 'Computer Use 检查未通过'}：${check.name}：${check.detail}`);
     return { ready: canPrepare && checks.every(check => check.ok || check.warning), canPrepare, checks, backup: snapshot ? path.join(this.snapshots, `${snapshot.id}.toml`) : undefined };
@@ -194,6 +211,12 @@ export class ComputerUseRuntime {
       if (!before.checks.find(check => check.name === 'Computer Use 插件')?.ok) {
         trackAfter = true;
         await this.runner(path.join(this.root, 'resources/codex.exe'), this.args('plugin', 'add', selector, '--json'), this.env);
+      }
+      if (this.browserUse) for (const name of ['browser', 'chrome']) {
+        if (before.checks.find(check => check.name === `${name} 插件诊断`)?.ok) continue;
+        trackAfter = true;
+        this.report(`使用现有 bundled marketplace 准备 ${name} 插件…`);
+        await this.runner(path.join(this.root, 'resources/codex.exe'), this.args('plugin', 'add', `${name}@openai-bundled`, '--json'), this.env);
       }
     } finally {
       if (trackAfter) {

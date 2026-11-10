@@ -98,6 +98,7 @@ try {
     await button('检测安装').click();
     await page.getByText(/关键代码结构匹配，可尝试修复 26\.1103\.32239/).waitFor();
     await button('中文 + Computer Use').click();
+    assert.equal(await button('中文 + 电脑与浏览器').isDisabled(), true, 'unsupported browser structures cannot be selected');
     await button('创建修复副本').click();
     await button('准备 Computer Use').waitFor();
     assert.equal(await button('启动副本').isEnabled(), true, 'plugin preparation must not prevent starting the app to finish setup');
@@ -137,6 +138,17 @@ try {
     await button('运行环境详情').click();
     await page.getByText(/官方 CLI 已确认安装，文件布局未确认/).waitFor();
     if (run === 1) await capture({ path: `${output}/computer-use-installed.png`, fullPage: true });
+    await page.goto(`${base}?state=cua-browser`);
+    await page.waitForFunction(() => document.querySelector('#install-path')?.disabled === false);
+    await button('检测安装').click();
+    await button('中文 + 电脑与浏览器').click();
+    assert.equal(await button('创建修复副本').isVisible(), true, 'old CUA-only record cannot satisfy the browser combination');
+    await button('创建修复副本').click();
+    await page.getByText(/此副本包含 Chrome 和内置 Browser Use 适配/).waitFor();
+    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('ui-records'))[0].features.browserUse), true);
+    await page.locator('.copies-list > div').first().getByRole('button', { name: '准备 Computer Use', exact: true }).click();
+    await page.locator('.copies-list > div').first().getByText('基础检查通过', { exact: true }).waitFor();
+    if (run === 1) await capture({ path: `${output}/browser-combination.png`, fullPage: true });
     await page.goto(`${base}?state=mac`);
     await page.getByText('当前系统暂不支持此工具').waitFor();
     assert.equal(await button('检测安装').isDisabled(), true);

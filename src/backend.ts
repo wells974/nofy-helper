@@ -38,6 +38,6 @@ export class RepairBackend {
   restoreComputerUseConfig(id: string) { return this.call<void>('restoreComputerUseConfig', id); }
   restore(id: string) { return this.call<Installation>('restore', id); }
   launchPath(id: string) { return this.call<string>('launchPath', id); }
-  launchSpec(id: string) { return this.call<{ executable: string; computerUse: boolean }>('launchSpec', id); }
+  launchSpec(id: string) { return this.call<{ executable: string; computerUse: boolean; browserUse: boolean }>('launchSpec', id); }
   close() { void this.worker.terminate(); }
 }

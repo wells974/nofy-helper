@@ -43,6 +43,15 @@ test('missing log evidence remains unknown for both transports', async t => {
   assert.ok(checks.every(c => !c.ok && /不是通过结论/.test(c.detail)));
 });
 
+test('checks the independent Electron roaming log location as well as Store logs', async t => {
+  const dir = await fixture(t), roaming = path.join(dir, 'roaming'), logs = path.join(roaming, 'Codex/logs');
+  await mkdir(logs, { recursive: true });
+  await writeFile(path.join(logs, 'copy.log'), 'computer-use native pipe startup failed missing-helper-path');
+  const checks = await desktopTransportChecks(path.join(dir, 'local'), roaming);
+  assert.match(checks.find(check => check.name === 'Native pipe 最近日志')!.detail, /missing-helper-path/);
+  assert.match(checks.find(check => check.name === 'Browser Use 最近日志')!.detail, /发现 1 个非空日志/);
+});
+
 test('uses the actual registry manifest path and reports stale Chrome paths independently of native pipe', async t => {
   const dir = await fixture(t), codexHome = path.join(dir, '.codex'), custom = path.join(dir, 'registered');
   await mkdir(codexHome); await mkdir(custom);
