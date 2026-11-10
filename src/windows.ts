@@ -1,14 +1,7 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import path from 'node:path';
 import { readdir, stat } from './raw-fs';
 import type { Candidate } from './shared';
-const exec = promisify(execFile);
-const powershell = () => path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-async function query(script: string): Promise<string> {
-  const { stdout } = await exec(powershell(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ${script}`], { windowsHide: true, timeout: 30000, maxBuffer: 1024 * 1024 });
-  return stdout.replace(/^\uFEFF/, '').trim();
-}
+import { queryPowerShell as query } from './powershell';
 export function assertWindows(): void {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('修复和启动仅支持 Windows x64。当前系统可以预览界面。');
 }

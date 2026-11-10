@@ -214,3 +214,26 @@ test('CLI failures include the exit code and useful stderr while masking common 
   assert.match(error.message, /退出码 2/); assert.match(error.message, /plugin not found in marketplace/);
   for (const secret of ['private-key', 'private-token', 'user:password', 'sk-test-secret']) assert.ok(!error.message.includes(secret));
 });
+
+test('duplicate required browser plugin records block preparation without changing config or reinstalling', async t => {
+  const e = await environment(t);
+  for (const name of ['browser', 'chrome']) for (const root of [e.root, e.source]) {
+    const file = path.join(root, `resources/plugins/openai-bundled/plugins/${name}/.codex-plugin/plugin.json`);
+    await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, JSON.stringify({ name, version: '1.0' }));
+  }
+  for (const duplicate of ['browser', 'chrome']) {
+    const runtime = new ComputerUseRuntime(e.root, e.source, e.folder, e.home, undefined, async (_file, args) => {
+      assert.ok(!args.includes('add'), 'ambiguous registrations must not trigger a reinstall');
+      return JSON.stringify({ installed: ['computer-use', 'browser', 'chrome', duplicate].map(name => ({
+        pluginId: `${name}@openai-bundled`, installed: true, enabled: true, version: '1.0',
+      })) });
+    }, undefined, true);
+    const status = await runtime.status();
+    assert.equal(status.canPrepare, false);
+    assert.equal(status.ready, false);
+    assert.ok(status.checks.some(check => check.detail.includes(`重复的 ${duplicate}`)));
+    await assert.rejects(() => runtime.prepare(), /CLI 校验失败/);
+    assert.equal(await readFile(path.join(e.home, 'config.toml'), 'utf8'), e.original);
+    assert.equal((await runtime.status()).backup, undefined);
+  }
+});

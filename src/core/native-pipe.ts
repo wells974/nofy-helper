@@ -1,9 +1,8 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { isDeepStrictEqual } from 'node:util';
 import { parse, type TomlTable } from 'smol-toml';
 
-const exec = promisify(execFile);
+import { queryPowerShell } from '../powershell';
+import { withEnvironment } from './process-env';
 export const pipeKeys = ['SKY_CUA_NATIVE_PIPE', 'SKY_CUA_NATIVE_PIPE_DIRECTORY'] as const;
 export type PipeProbe = (pipe: string) => Promise<'active' | 'missing' | 'unknown'>;
 export interface PipeState { state: 'absent' | 'active' | 'stale' | 'unknown'; detail: string }
@@ -14,9 +13,9 @@ export interface PipeConfigPlan extends PipeState { cleaned?: Buffer }
 export const probeNativePipe: PipeProbe = async pipe => {
   if (process.platform !== 'win32') return 'unknown';
   try {
-    const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      "$ErrorActionPreference='Stop'; if (Test-Path -LiteralPath $env:NOFY_PIPE_PROBE_PATH) { 'active' } else { 'missing' }"],
-    { env: { ...process.env, NOFY_PIPE_PROBE_PATH: pipe }, windowsHide: true, timeout: 10000, maxBuffer: 4096 });
+    const stdout = await queryPowerShell(
+      "if (Test-Path -LiteralPath $env:NOFY_PIPE_PROBE_PATH) { 'active' } else { 'missing' }",
+      { env: withEnvironment(process.env, { NOFY_PIPE_PROBE_PATH: pipe }), timeout: 10000, maxBuffer: 4096 });
     return stdout.trim() === 'active' ? 'active' : stdout.trim() === 'missing' ? 'missing' : 'unknown';
   } catch { return 'unknown'; }
 };

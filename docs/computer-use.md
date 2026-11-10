@@ -23,6 +23,8 @@
 
 使用 `shell: false` 启动副本自带且与原包一致的官方 CLI，传入实际 `CODEX_HOME`，沿用现有 marketplace 配置执行 `plugin list --marketplace openai-bundled --json` 和必要的 `plugin add`。不再用 `-c` 把 `openai-bundled` 来源替换为副本目录：上游安装器 `Get-ConfiguredBundledMarketplaceRoot` 明确记录，新版 CLI 只加载 Desktop 在 `.tmp/bundled-marketplaces/openai-bundled` 生成的保留来源，其他来源可能被静默忽略，造成“手动能看到插件、helper 却显示未安装”。
 
+检查与启动共用解析后的绝对 `CODEX_HOME`，避免相对目录随子进程工作目录变化。Windows Worker 的环境变量读取区分大小写，而 Windows 子进程又会合并同名变量，因此读取时识别大小写变体、覆盖时删除旧变体；冲突的配置目录不静默选取。启动时移除会让 Electron 进入 Node 模式的继承变量，保留原有可信目录并设置 CUA 启动标志。CLI 的工作目录固定在其所在目录，避免继承 helper 启动项目的工作目录。
+
 用户提供的 helper 日志在 2026-11-10 08:58:54（北京时间）记录了“清理失效 pipe 成功”后“CLI 插件命令失败”，不是完整准备成功。现在失败会显示退出码及经过常见凭据脱敏的 stderr，日志同时记录实际 `CODEX_HOME`，避免把来源不一致误报成插件未安装。此证据定位到准备流程缺陷，尚不能独立证明原生服务最终已成功启动。
 
 准备前备份当前 `config.toml`，记录准备后的内容摘要和文件是否存在。重复尝试沿用首次备份；恢复前验证备份，并确认当前配置仍是本工具准备后的版本，避免覆盖用户之后的修改。插件缓存保留，应用文件恢复与配置恢复使用独立入口。Computer Use 未就绪不再禁用副本启动，允许进入 Codex 完成插件／Any App 设置；ASAR／EXE 指纹、官方应用更新和进程冲突仍会阻止不符合条件的启动。
@@ -49,7 +51,9 @@ Windows 使用步骤：更新并重新打包 nofy-helper，退出 Codex，在现
 
 自动测试使用合成 ASAR／PE、模拟插件 CLI 和浏览器桥接；Electron 冒烟测试验证真实 Electron 文件系统与 Worker 检测。尚未在用户的实际 Windows 包上验证 CLI 注册、统一 CUA 清单生成、截图或输入。
 
-新增回归覆盖 pipe 存在／缺失／未知状态、失效配置清理与精确恢复、活动配置保留、TOML 注释和多行字符串保护、启动环境隔离、Chrome 失效主机路径及历史日志判读。Windows pipe 探测与注册表读取尚需实机验证；不能据这些模拟测试宣称用户本次错误已消失。
+新增回归覆盖 pipe 存在／缺失／未知状态、失效配置清理与精确恢复、活动配置保留、TOML 注释和多行字符串保护、启动环境隔离、Chrome 失效主机路径及历史日志判读。浏览器组合遇到重复的 browser／chrome 插件记录时停止准备，不把歧义当作未安装而重复注册。
+
+所有 PowerShell 查询共用系统绝对路径和 UTF-8 输出，避免 Chrome 主机注册路径含中文时解码损坏。`tests/windows-integration.test.ts` 由现有 Windows CI 的 `npm run check` 自动运行：创建真实 named pipe，验证存在／关闭后的探测结果且不建立连接；验证包含中文、空格及特殊字符的路径原样返回。macOS 明确跳过这两项，不用模拟结果替代 Windows 验证。它们也不代替真实 Codex 的原生服务、Chrome 扩展和页面操作验收。
 
 浏览器可用性适配通过独立组合选项启用。未引入参考项目的自定义模型、无关插件、全局环境变量、代理继承、Windows sandbox 配置或 Windows 10 原生截图二进制修改。
 

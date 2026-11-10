@@ -12,9 +12,15 @@ const internal = ['areRequirementsPending', 'isBrowserAgentGateEnabled', 'isBrow
 
 export function browserUseSpans(source: string): { external: Span[]; internal: Span[]; pane: Span[] } {
   const found = { external: [] as Span[], internal: [] as Span[], pane: [] as Span[] };
+  const runtimeHooks: string[] = [], modelHooks: string[] = [];
   const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
   simple(ast, {
     CallExpression(node: any) {
+      const hook = hookName(node.callee);
+      if (hook && node.arguments.length === 1 && node.arguments[0]?.type === 'Literal') {
+        if (node.arguments[0].value === '1892382740') runtimeHooks.push(hook);
+        if (node.arguments[0].value === '337408568') modelHooks.push(hook);
+      }
       if (node.arguments.length !== 1 || node.arguments[0]?.type !== 'ObjectExpression' || !['FunctionExpression', 'ArrowFunctionExpression'].includes(node.callee.type)) return;
       const props = node.arguments[0].properties, keys = props.map(propertyName);
       const params = node.callee.params;
@@ -42,6 +48,11 @@ export function browserUseSpans(source: string): { external: Span[]; internal: S
       found.pane.push({ start: node.start, end: node.end, value: `(${source.slice(node.start, node.end)},true)` });
     },
   });
+  // Upstream places browser-pane alongside cua-runtime and cua-model-gate in the
+  // same renderer member. Many other chunks read browser.in-app for unrelated UI.
+  // Select that module by its unique paired hook calls, never by filename/version
+  // or by taking the first capability read. Ambiguity within it still fails below.
+  if (runtimeHooks.length !== 1 || modelHooks.length !== 1 || runtimeHooks[0] !== modelHooks[0]) found.pane = [];
   return found;
 }
 
@@ -58,7 +69,7 @@ export async function planBrowserUse(plan: ArchivePlan): Promise<{ support: Comp
     const all = [...spans.external, ...spans.internal, ...spans.pane];
     if (all.length) changes.push({ file, original, modified: apply(original, all) });
   }
-  if (counts.external !== 3 || counts.internal !== 3 || counts.pane !== 1) throw new Error(`浏览器结构不匹配（Chrome ${counts.external}/3，内置 Browser Use ${counts.internal}/3，面板 ${counts.pane}/1），未生成浏览器补丁。`);
+  if (counts.external !== 3 || counts.internal !== 3 || counts.pane !== 1) throw new Error(`浏览器结构不匹配（Chrome ${counts.external}/3，内置 Browser Use ${counts.internal}/3，面板 ${counts.pane}/1；面板需位于两个 CUA 特性调用所在模块且唯一），未生成浏览器补丁。`);
   return { support: { supported: true, reason: 'Chrome、内置 Browser Use 与浏览器面板结构均唯一匹配；创建新组合副本后仍需完成扩展设置并验证实际连接。', files: changes.map(change => change.file), patches: 7 }, changes };
 }
 

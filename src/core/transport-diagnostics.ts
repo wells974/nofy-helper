@@ -1,18 +1,16 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { open, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { RuntimeCheck } from '../shared';
 
-const exec = promisify(execFile);
+import { queryPowerShell } from '../powershell';
 const hostName = 'com.openai.codexextension';
 export type RegistryProbe = () => Promise<string | undefined>;
 const readChromeRegistration: RegistryProbe = async () => {
   if (process.platform !== 'win32') return;
   // Read the unnamed value through the API, avoiding localized '(Default)' output.
-  const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    `$ErrorActionPreference='Stop'; $keyPath='HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\${hostName}'; if (Test-Path -LiteralPath $keyPath) { (Get-Item -LiteralPath $keyPath).GetValue('') }`],
-  { windowsHide: true, timeout: 10000, maxBuffer: 8192 });
+  const stdout = await queryPowerShell(
+    `$keyPath='HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\${hostName}'; if (Test-Path -LiteralPath $keyPath) { (Get-Item -LiteralPath $keyPath).GetValue('') }`,
+    { timeout: 10000, maxBuffer: 8192 });
   return stdout.trim() || undefined;
 };
 async function jsonFile(file: string): Promise<any> {

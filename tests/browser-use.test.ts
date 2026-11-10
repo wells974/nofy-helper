@@ -36,7 +36,7 @@ async function load(file: string, member: string): Promise<any> {
 
 test('browser combination preserves WSL, loading and user controls while opening the three observed browser targets', async t => {
   const { root, storage } = await environment(t);
-  await computerUseFixture(root, { 'webview/browser.js': browser });
+  await computerUseFixture(root, { 'webview/browser.js': runtime + browser, 'webview/runtime.js': '' });
   const manager = new RepairManager(storage), source = await inspect(root);
   assert.equal(source.browserUse?.supported, true, source.browserUse?.reason);
   const original = await readFile(path.join(root, 'resources/app.asar'));
@@ -75,7 +75,7 @@ test('language, CUA, and browser patches compose on a single member and do not d
 });
 
 test('CUA-only copies and old manifests retain their original browser behavior', async t => {
-  const { root, storage } = await environment(t); await computerUseFixture(root, { 'webview/browser.js': browser });
+  const { root, storage } = await environment(t); await computerUseFixture(root, { 'webview/browser.js': runtime + browser, 'webview/runtime.js': '' });
   const manager = new RepairManager(storage), source = await inspect(root);
   const record = await manager.install(source, { computerUse: true });
   const file = path.join(storage, record.id, 'app/resources/app.asar');
@@ -83,6 +83,40 @@ test('CUA-only copies and old manifests retain their original browser behavior',
   const manifest = path.join(storage, record.id, 'manifest.json'), saved = JSON.parse(await readFile(manifest, 'utf8'));
   delete saved.features.browserUse; await writeFile(manifest, JSON.stringify(saved));
   assert.equal((await manager.list())[0].features?.browserUse, undefined);
+});
+
+test('29 browser capability reads select only the upstream CUA feature module and preserve unrelated chunks', async t => {
+  const { root, storage } = await environment(t);
+  const unrelated = Object.fromEntries(Array.from({ length: 28 }, (_, i) => [
+    `webview/assets/async/unrelated-${i}.js`,
+    `const capability=()=>({isCapable:false});export const pane=capability(null,{name:'browser.in-app'}).isCapable;const text='1892382740 337408568';`,
+  ]));
+  const target = 'webview/assets/async/renamed-feature-module.js';
+  await computerUseFixture(root, { ...unrelated, [target]: runtime + browser, 'webview/runtime.js': '' });
+  const manager = new RepairManager(storage), source = await inspect(root);
+  assert.equal(source.computerUse?.supported, true);
+  assert.equal(source.browserUse?.supported, true, source.browserUse?.reason);
+  assert.deepEqual(source.browserUse?.files, [target]);
+  const record = await manager.install(source, { computerUse: true, browserUse: true });
+  const file = path.join(storage, record.id, 'app/resources/app.asar'), archive = await readArchive(file);
+  for (const [name, entry] of entries(archive.header)) {
+    const bytes = await readEntry(archive, entry); verifyIntegrity(bytes, entry);
+    if (name in unrelated) assert.equal(bytes.toString(), unrelated[name], name);
+  }
+  const mod = await load(file, target);
+  assert.equal(mod.pane, true); assert.equal(mod.runtime, true); assert.equal(mod.restricted, false);
+  assert.equal(mod.external(), 'available'); assert.equal(mod.internal(), 'available');
+});
+
+test('multiple pane reads inside the CUA feature module remain ambiguous and are not modified', async t => {
+  const { root, storage } = await environment(t);
+  await computerUseFixture(root, { 'webview/browser.js': runtime + browser + `export const secondPane=capability(null,{name:'browser.in-app'}).isCapable;`, 'webview/runtime.js': '' });
+  const source = await inspect(root), original = await readFile(path.join(root, 'resources/app.asar'));
+  assert.equal(source.computerUse?.supported, true);
+  assert.equal(source.browserUse?.supported, false);
+  assert.match(source.browserUse!.reason, /面板 2\/1/);
+  await assert.rejects(() => new RepairManager(storage).install(source, { computerUse: true, browserUse: true }), /面板 2\/1/);
+  assert.deepEqual(await readFile(path.join(root, 'resources/app.asar')), original);
 });
 
 test('ambiguous or incomplete browser targets reject only the browser combination', async t => {

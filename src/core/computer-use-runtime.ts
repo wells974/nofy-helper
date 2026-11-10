@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { hashFile, sha256 } from './hash';
 import type { ComputerUseStatus, RuntimeCheck } from '../shared';
 import { planPipeConfig, type PipeProbe, probeNativePipe } from './native-pipe';
+import { envValue, withEnvironment } from './process-env';
 import { browserTransportChecks, desktopTransportChecks } from './transport-diagnostics';
 
 const exec = promisify(execFile);
@@ -22,8 +23,8 @@ export function pluginCommandError(error: unknown): Error {
   const code = typeof failure?.code === 'number' || typeof failure?.code === 'string' ? String(failure.code) : '未知';
   return new Error(`Codex CLI 插件命令执行失败（退出码 ${code}）${detail ? `：${detail}` : '：CLI 未返回错误详情。'}`);
 }
-const runCli: CliRunner = async (file, args, env) => {
-  try { return (await exec(file, args, { env, windowsHide: true, timeout: 45000, maxBuffer: 4 * 1024 * 1024 })).stdout; }
+export const runPluginCli: CliRunner = async (file, args, env) => {
+  try { return (await exec(file, args, { env, cwd: path.dirname(file), windowsHide: true, timeout: 45000, maxBuffer: 4 * 1024 * 1024 })).stdout; }
   catch (error) { throw pluginCommandError(error); }
 };
 interface Snapshot { id: string; existed: boolean; beforeHash: string; afterHash?: string; afterExisted?: boolean; configPath: string }
@@ -40,11 +41,11 @@ const required = [
 /** Uses the selected copy's official CLI and packaged plugins; no downloaded scripts. */
 export class ComputerUseRuntime {
   constructor(readonly root: string, readonly source: string, readonly folder: string, readonly codexHome: string,
-    private readonly report: (message: string) => void = () => {}, private readonly runner: CliRunner = runCli,
+    private readonly report: (message: string) => void = () => {}, private readonly runner: CliRunner = runPluginCli,
     private readonly pipeProbe: PipeProbe = probeNativePipe, private readonly browserUse = false) {}
   private get configPath() { return path.join(this.codexHome, 'config.toml'); }
   private get snapshots() { return path.join(this.folder, 'cua-config'); }
-  private get env(): NodeJS.ProcessEnv { return { ...process.env, CODEX_HOME: this.codexHome, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1' }; }
+  private get env(): NodeJS.ProcessEnv { return withEnvironment(process.env, { CODEX_HOME: this.codexHome, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1' }); }
   private args(...args: string[]) {
     // Newer CLIs only accept openai-bundled at the Desktop-materialized reserved
     // root. Overriding it with this copy's resources silently hides installed plugins.
@@ -119,6 +120,7 @@ export class ComputerUseRuntime {
           const matches = plugins.installed.filter((item: any) => item?.pluginId === `${name}@openai-bundled`);
           const ok = matches.length === 1 && matches[0].installed === true && matches[0].enabled === true;
           const requiredPlugin = this.browserUse && name !== 'unified-computer-use';
+          if (requiredPlugin && matches.length > 1) throw new Error(`官方 CLI 返回重复的 ${name} 插件记录，未自动重装。`);
           checks.push({ name: `${name} 插件诊断`, ok, ...(!ok && !requiredPlugin ? { warning: true } : {}), detail: ok
             ? '官方 CLI：已安装并启用；尚未验证运行时连接。'
             : requiredPlugin ? '官方 CLI 未确认唯一且已启用的插件；点击准备以安装当前组合所需插件。' : '官方 CLI 未确认唯一且已启用的插件；浏览器功能需单独完成插件设置，不自动重装。' });
@@ -164,8 +166,8 @@ export class ComputerUseRuntime {
       canPrepare = false;
       checks.push({ name: 'Native pipe 配置', ok: false, detail: '配置不可读或路径不安全，未修改。' });
     }
-    const localAppData = process.platform === 'win32' ? process.env.LOCALAPPDATA : undefined;
-    checks.push(...await browserTransportChecks(this.codexHome, localAppData), ...await desktopTransportChecks(localAppData, process.platform === 'win32' ? process.env.APPDATA : undefined));
+    const localAppData = process.platform === 'win32' ? envValue(process.env, 'LOCALAPPDATA') : undefined;
+    checks.push(...await browserTransportChecks(this.codexHome, localAppData), ...await desktopTransportChecks(localAppData, process.platform === 'win32' ? envValue(process.env, 'APPDATA') : undefined));
     const snapshot = await this.snapshot();
     for (const check of checks.filter(check => !check.ok)) this.report(`${check.warning ? 'Computer Use 提示' : 'Computer Use 检查未通过'}：${check.name}：${check.detail}`);
     return { ready: canPrepare && checks.every(check => check.ok || check.warning), canPrepare, checks, backup: snapshot ? path.join(this.snapshots, `${snapshot.id}.toml`) : undefined };

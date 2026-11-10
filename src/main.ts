@@ -5,7 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { RepairBackend } from './backend';
 import { discover, assertWindows } from './windows';
-import { cleanPipeEnvironment } from './core/native-pipe';
+import { desktopEnvironment } from './core/launch-environment';
 import type { Inspection, Progress, Result, RepairOptions } from './shared';
 
 let window: BrowserWindow;
@@ -79,7 +79,7 @@ async function setup() {
   handle('launch', async (id: string) => {
     assertWindows();
     if (typeof id !== 'string') throw new Error('无效记录。');
-    const { executable, computerUse, browserUse } = await manager.launchSpec(id);
+    const { executable, codexHome, computerUse, browserUse } = await manager.launchSpec(id);
     report(`启动副本 ${id}：${executable}；功能：${browserUse ? '中文 + 电脑与浏览器' : computerUse ? '中文 + Computer Use' : '中文界面'}。`);
     if (computerUse) {
       try {
@@ -87,16 +87,13 @@ async function setup() {
         if (!status.ready) report('Computer Use 尚未就绪，仍可启动副本；请在 Codex 内检查插件与 Any App 设置。');
       } catch (error) { report(`无法确认 Computer Use 状态，仍可启动副本：${error instanceof Error ? error.message : String(error)}`); }
     }
-    let launchEnv = { ...process.env };
-    if (computerUse) {
-      const cleaned = await cleanPipeEnvironment(launchEnv);
-      launchEnv = { ...cleaned.env, CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE: '1', NODE_REPL_TRUSTED_CODE_PATHS: [process.env.NODE_REPL_TRUSTED_CODE_PATHS, path.join(path.dirname(executable), 'resources/cua_node/bin/node_modules'), path.join(path.dirname(executable), 'resources/plugins/openai-bundled')].filter(Boolean).join(path.delimiter) };
-      if (cleaned.check.state === 'stale') report('本次启动已排除继承的失效 native pipe 变量；系统环境变量未修改。');
-      else if (cleaned.check.state === 'unknown') report(cleaned.check.detail);
-    }
+    const launch = await desktopEnvironment(executable, computerUse, codexHome);
+    if (launch.check?.state === 'stale') report('本次启动已排除继承的失效 native pipe 变量；系统环境变量未修改。');
+    else if (launch.check?.state === 'unknown') report(launch.check.detail);
+    report(`启动使用 CODEX_HOME：${codexHome}。`);
     await new Promise<void>((resolve, reject) => {
       const child = spawn(executable, [], { detached: true, stdio: 'ignore', cwd: path.dirname(executable), shell: false,
-        env: launchEnv });
+        env: launch.env });
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve(); });
     });

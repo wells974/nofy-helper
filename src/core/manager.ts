@@ -7,7 +7,7 @@ import { integrityResource, patchExecutable } from './pe';
 import { addComputerUsePatches, planComputerUse } from './computer-use-gates';
 import { addBrowserUsePatches, planBrowserUse } from './browser-use-gates';
 import { ComputerUseRuntime } from './computer-use-runtime';
-import os from 'node:os';
+import { resolveCodexHome } from './process-env';
 import type { Inspection, Installation, RepairOptions, ComputerUseSupport } from '../shared';
 
 const asar = (root: string) => path.join(root, 'resources', 'app.asar');
@@ -168,7 +168,7 @@ export class RepairManager {
     await this.noLinks(this.folder(id), ['app', 'app/resources', 'app/resources/app.asar', `app/${record.source.executable}`]);
     if (!configOnly && (await hashFile(asar(record.source.root)) !== record.source.sourceHash || await hashFile(path.join(record.source.root, record.source.executable)) !== record.source.executableHash)) throw new Error('官方应用已更新，请重新检测并创建修复副本。');
     if (!configOnly && (await hashFile(asar(app)) !== record.patchedAsarHash || await hashFile(path.join(app, record.source.executable)) !== record.patchedExeHash)) throw new Error('修复副本已变化，请重新创建。');
-    return new ComputerUseRuntime(app, record.source.root, this.folder(id), process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), this.report, undefined, undefined, record.features?.browserUse === true);
+    return new ComputerUseRuntime(app, record.source.root, this.folder(id), resolveCodexHome(), this.report, undefined, undefined, record.features?.browserUse === true);
   }
   computerUseStatus(id: string) { return this.exclusive(async () => (await this.computerUseRuntime(id)).status()); }
   prepareComputerUse(id: string) { return this.exclusive(async () => { await this.assertStopped(); return (await this.computerUseRuntime(id)).prepare(); }); }
@@ -176,7 +176,7 @@ export class RepairManager {
   async launchSpec(id: string) {
     const executable = await this.launchPath(id);
     const record = await this.manifest(id);
-    return { executable, computerUse: record.features?.computerUse === true, browserUse: record.features?.browserUse === true };
+    return { executable, codexHome: resolveCodexHome(), computerUse: record.features?.computerUse === true, browserUse: record.features?.browserUse === true };
   }
   async launchPath(id: string): Promise<string> {
     return this.exclusive(async () => {
