@@ -1,5 +1,5 @@
 import { parse } from 'acorn';
-import { simple } from 'acorn-walk';
+import { ancestor, simple } from 'acorn-walk';
 import { entries, readEntry, verifyIntegrity, type ArchiveChange, type ArchivePlan } from './asar';
 import { apply, hookName, propertyName, type Span } from './computer-use-gates';
 import type { ComputerUseSupport } from '../shared';
@@ -12,14 +12,24 @@ const internal = ['areRequirementsPending', 'isBrowserAgentGateEnabled', 'isBrow
 
 export function browserUseSpans(source: string): { external: Span[]; internal: Span[]; pane: Span[] } {
   const found = { external: [] as Span[], internal: [] as Span[], pane: [] as Span[] };
-  const runtimeHooks: string[] = [], modelHooks: string[] = [];
+  type ScopedHook = { hook: string; scope: object };
+  const runtimeHooks: ScopedHook[] = [], modelHooks: ScopedHook[] = [];
+  const panes: { span: Span; scope: object }[] = [];
+  // Bundlers can put unrelated capability consumers in the same JS member.
+  // Use the nearest function, not an enclosing function that owns a callback.
+  const scopeOf = (ancestors: any[]): object => {
+    for (let i = ancestors.length - 1; i >= 0; i--) {
+      if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(ancestors[i].type)) return ancestors[i];
+    }
+    return ancestors[0]; // Module-level feature declarations share the Program scope.
+  };
   const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
-  simple(ast, {
-    CallExpression(node: any) {
+  ancestor(ast, {
+    CallExpression(node: any, _state: unknown, ancestors: any[]) {
       const hook = hookName(node.callee);
       if (hook && node.arguments.length === 1 && node.arguments[0]?.type === 'Literal') {
-        if (node.arguments[0].value === '1892382740') runtimeHooks.push(hook);
-        if (node.arguments[0].value === '337408568') modelHooks.push(hook);
+        if (node.arguments[0].value === '1892382740') runtimeHooks.push({ hook, scope: scopeOf(ancestors) });
+        if (node.arguments[0].value === '337408568') modelHooks.push({ hook, scope: scopeOf(ancestors) });
       }
       if (node.arguments.length !== 1 || node.arguments[0]?.type !== 'ObjectExpression' || !['FunctionExpression', 'ArrowFunctionExpression'].includes(node.callee.type)) return;
       const props = node.arguments[0].properties, keys = props.map(propertyName);
@@ -39,20 +49,22 @@ export function browserUseSpans(source: string): { external: Span[]; internal: S
         found[kind].push({ start: property.shorthand ? property.start : property.value.start, end: property.value.end, value: property.shorthand ? `${key}:${value}` : value });
       }
     },
-    MemberExpression(node: any) {
+    MemberExpression(node: any, _state: unknown, ancestors: any[]) {
       if ((node.computed ? node.property.value : node.property.name) !== 'isCapable') return;
       const call = node.object;
       if (call.type !== 'CallExpression' || !hookName(call.callee) || call.arguments.length !== 2 || call.arguments[1]?.type !== 'ObjectExpression') return;
       const props = call.arguments[1].properties;
       if (props.length !== 1 || propertyName(props[0]) !== 'name' || props[0].value.type !== 'Literal' || props[0].value.value !== 'browser.in-app') return;
-      found.pane.push({ start: node.start, end: node.end, value: `(${source.slice(node.start, node.end)},true)` });
+      panes.push({ scope: scopeOf(ancestors), span: { start: node.start, end: node.end, value: `(${source.slice(node.start, node.end)},true)` } });
     },
   });
-  // Upstream places browser-pane alongside cua-runtime and cua-model-gate in the
-  // same renderer member. Many other chunks read browser.in-app for unrelated UI.
-  // Select that module by its unique paired hook calls, never by filename/version
-  // or by taking the first capability read. Ambiguity within it still fails below.
-  if (runtimeHooks.length !== 1 || modelHooks.length !== 1 || runtimeHooks[0] !== modelHooks[0]) found.pane = [];
+  // The desktop feature publisher reads browser-pane and both CUA gates in one
+  // scope. Link routing and thread handoff may read the same capability elsewhere
+  // in this member; leave those consumers alone. Same-scope ambiguity still fails.
+  const runtime = runtimeHooks[0], model = modelHooks[0];
+  if (runtimeHooks.length === 1 && modelHooks.length === 1 && runtime.hook === model.hook && runtime.scope === model.scope) {
+    found.pane = panes.filter(pane => pane.scope === runtime.scope).map(pane => pane.span);
+  }
   return found;
 }
 
@@ -69,7 +81,7 @@ export async function planBrowserUse(plan: ArchivePlan): Promise<{ support: Comp
     const all = [...spans.external, ...spans.internal, ...spans.pane];
     if (all.length) changes.push({ file, original, modified: apply(original, all) });
   }
-  if (counts.external !== 3 || counts.internal !== 3 || counts.pane !== 1) throw new Error(`浏览器结构不匹配（Chrome ${counts.external}/3，内置 Browser Use ${counts.internal}/3，面板 ${counts.pane}/1；面板需位于两个 CUA 特性调用所在模块且唯一），未生成浏览器补丁。`);
+  if (counts.external !== 3 || counts.internal !== 3 || counts.pane !== 1) throw new Error(`浏览器结构不匹配（Chrome ${counts.external}/3，内置 Browser Use ${counts.internal}/3，面板 ${counts.pane}/1；面板需与两个 CUA 特性调用位于同一函数作用域且唯一），未生成浏览器补丁。`);
   return { support: { supported: true, reason: 'Chrome、内置 Browser Use 与浏览器面板结构均唯一匹配；创建新组合副本后仍需完成扩展设置并验证实际连接。', files: changes.map(change => change.file), patches: 7 }, changes };
 }
 

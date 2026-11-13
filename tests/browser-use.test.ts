@@ -7,6 +7,7 @@ import { computerUseFixture, availability, runtime } from './computer-use-fixtur
 import { provider } from './fixtures';
 import { inspect, RepairManager } from '../src/core/manager';
 import { entries, readArchive, readEntry, verifyIntegrity } from '../src/core/asar';
+import { browserUseSpans } from '../src/core/browser-use-gates';
 
 // Independent executable fixtures for the upstream's named browser availability inputs.
 const browser = `
@@ -108,7 +109,51 @@ test('29 browser capability reads select only the upstream CUA feature module an
   assert.equal(mod.external(), 'available'); assert.equal(mod.internal(), 'available');
 });
 
-test('multiple pane reads inside the CUA feature module remain ambiguous and are not modified', async t => {
+test('three pane reads in one member select the feature publisher and preserve link routing and handoff', async t => {
+  const { root, storage } = await environment(t);
+  const member = 'webview/combined.js';
+  const sourceCode = browser.replace("export const pane=capability(null,{name:'browser.in-app'}).isCapable;", '') + `
+export function routeLink(){return capability(null,{name:'browser.in-app'}).isCapable;}
+export const features=()=>{
+ const sdk={check:id=>id==='337408568'};
+ const pane=capability(null,{name:'browser.in-app'}).isCapable;
+ const runtime=(0,sdk.check)('1892382740'), restricted=(0,sdk.check)('337408568');
+ const handoff=()=>capability(null,{name:'browser.in-app'}).isCapable;
+ return {browserPane:pane,runtime,restricted,handoff};
+};`;
+  await computerUseFixture(root, { [member]: sourceCode, 'webview/runtime.js': '' });
+  const source = await inspect(root);
+  assert.equal(source.browserUse?.supported, true, source.browserUse?.reason);
+  assert.equal(source.browserUse?.patches, 7);
+  const manager = new RepairManager(storage);
+  const original = await readFile(path.join(root, 'resources/app.asar'));
+  const record = await manager.install(source, { computerUse: true, browserUse: true });
+  const file = path.join(storage, record.id, 'app/resources/app.asar');
+  const mod = await load(file, member), features = mod.features();
+  assert.equal(features.browserPane, true);
+  assert.equal(features.runtime, true);
+  assert.equal(features.restricted, false);
+  assert.equal(mod.routeLink(), false);
+  assert.equal(features.handoff(), false);
+  assert.deepEqual(mod.browserCalls, ['browser.in-app', 'browser.in-app', 'browser.in-app']);
+  const archive = await readArchive(file);
+  const patched = (await readEntry(archive, entries(archive.header).find(([name]) => name === member)![1])).toString();
+  for (const consumer of ["export function routeLink(){return capability(null,{name:'browser.in-app'}).isCapable;}", "const handoff=()=>capability(null,{name:'browser.in-app'}).isCapable;"]) {
+    assert.ok(patched.includes(consumer), 'unrelated consumers remain byte-for-byte unchanged');
+  }
+  for (const [, entry] of entries(archive.header)) verifyIntegrity(await readEntry(archive, entry), entry);
+  await manager.restore(record.id);
+  assert.deepEqual(await readFile(file), original);
+});
+
+test('CUA gates in different function scopes cannot select a pane even when hook names match', () => {
+  const source = `const check=()=>false,capability=()=>({isCapable:false});
+function outer(){const runtime=check('1892382740');const pane=capability(null,{name:'browser.in-app'}).isCapable;
+return ()=>check('337408568');}`;
+  assert.deepEqual(browserUseSpans(source).pane, []);
+});
+
+test('multiple pane reads inside the CUA feature scope remain ambiguous and are not modified', async t => {
   const { root, storage } = await environment(t);
   await computerUseFixture(root, { 'webview/browser.js': runtime + browser + `export const secondPane=capability(null,{name:'browser.in-app'}).isCapable;`, 'webview/runtime.js': '' });
   const source = await inspect(root), original = await readFile(path.join(root, 'resources/app.asar'));
